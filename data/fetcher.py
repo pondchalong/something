@@ -8,8 +8,8 @@ def get_public_exchange():
     Public exchange — ไม่มี API key
     ใช้ดึง OHLCV / ticker เท่านั้น ไม่มี geo-restriction
     """
-    return ccxt.bybit({
-        "options": {"defaultType": "linear"},
+    return ccxt.binance({
+        "options": {"defaultType": "future"},
     })
 
 
@@ -17,6 +17,7 @@ def get_private_exchange():
     """
     Private exchange — มี API key
     สำหรับ Phase 2 (execute orders บน demo account)
+    ใช้ Bybit demo หรือ Binance testnet ก็ได้
     """
     return ccxt.bybit({
         "apiKey": BYBIT_API_KEY,
