@@ -23,8 +23,19 @@ def _ordered_names():
     return list(EXCHANGE_PRIORITY)
 
 
-def _fetch_with_fallback(method: str, *args, **kwargs):
+def _fetch_with_fallback(method: str, *args, preferred=None, **kwargs):
+    """
+    preferred=None → ลองตาม priority (fallback อัตโนมัติ)
+    preferred="kraken" → บังคับใช้ตัวนั้นเท่านั้น, fail = error ชัดเจน
+    """
     global _working_name
+
+    if preferred:
+        ex = _get_instance(preferred)
+        result = getattr(ex, method)(*args, **kwargs)
+        _working_name = preferred
+        return result
+
     last_err = None
     for name in _ordered_names():
         try:
@@ -42,16 +53,16 @@ def _fetch_with_fallback(method: str, *args, **kwargs):
     raise RuntimeError(f"ทุก exchange ใช้ไม่ได้ — ตัวสุดท้าย: {last_err}")
 
 
-def fetch_ohlcv(symbol=SYMBOL, timeframe=TIMEFRAME, limit=CANDLE_LIMIT) -> pd.DataFrame:
-    raw = _fetch_with_fallback("fetch_ohlcv", symbol, timeframe=timeframe, limit=limit)
+def fetch_ohlcv(symbol=SYMBOL, timeframe=TIMEFRAME, limit=CANDLE_LIMIT, exchange=None) -> pd.DataFrame:
+    raw = _fetch_with_fallback("fetch_ohlcv", symbol, timeframe=timeframe, limit=limit, preferred=exchange)
     df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     df.set_index("timestamp", inplace=True)
     return df
 
 
-def fetch_ticker(symbol=SYMBOL) -> dict:
-    return _fetch_with_fallback("fetch_ticker", symbol)
+def fetch_ticker(symbol=SYMBOL, exchange=None) -> dict:
+    return _fetch_with_fallback("fetch_ticker", symbol, preferred=exchange)
 
 
 def current_exchange() -> str:
@@ -60,9 +71,9 @@ def current_exchange() -> str:
 
 HTF_MAP = {"1m": "15m", "5m": "1h", "15m": "1h", "30m": "4h", "1h": "4h", "4h": "1d"}
 
-def fetch_htf_ohlcv(symbol=SYMBOL, timeframe=TIMEFRAME, limit=CANDLE_LIMIT) -> pd.DataFrame:
+def fetch_htf_ohlcv(symbol=SYMBOL, timeframe=TIMEFRAME, limit=CANDLE_LIMIT, exchange=None) -> pd.DataFrame:
     htf = HTF_MAP.get(timeframe, "1h")
-    return fetch_ohlcv(symbol=symbol, timeframe=htf, limit=limit)
+    return fetch_ohlcv(symbol=symbol, timeframe=htf, limit=limit, exchange=exchange)
 
 
 def get_private_exchange():
