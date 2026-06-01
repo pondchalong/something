@@ -86,11 +86,12 @@ fetcher (OHLCV) → indicators (LTF + HTF) → signals (confluence) → alert/da
 
 ## Data Layer (data/fetcher.py)
 
-**Multi-exchange fallback** — เหตุผล: Railway server อยู่ US, Binance + Bybit block US (HTTP 451 / CloudFront 403)
+**Multi-exchange fallback** — Railway region = Southeast Asia → ทุก exchange ใช้ได้ (ไม่มี geo-block แล้ว)
 
-- `EXCHANGE_PRIORITY = ["kraken", "coinbase", "kucoin", "gateio", "binance", "bybit"]`
-- เรียงตาม US-friendly ก่อน (Kraken/Coinbase เป็น US-based ไม่มี geo-block)
+- `EXCHANGE_PRIORITY = ["binance", "bybit", "kraken", "coinbase", "kucoin", "gateio"]`
+- **Binance primary** — liquidity สูงสุด + candle ไม่ cap; ตัวที่เหลือ = fallback robustness ถ้า primary down
 - ลองทีละตัวจนกว่าจะได้ → cache ตัวที่ใช้ได้ → fallback อัตโนมัติถ้า down
+- *ประวัติ:* เดิมเริ่มที่ Kraken/Coinbase (US-based) สมัย Railway อยู่ US ที่ Binance/Bybit โดน block (451/403) — แก้ด้วยการย้าย region เป็น SEA
 - ใช้ **public data เท่านั้น** (OHLCV, ticker) ไม่ต้อง API key
 - `fetch_ohlcv(exchange=None)` → None = auto fallback, ระบุชื่อ = บังคับใช้ตัวนั้น
 - `current_exchange()` → ชื่อ exchange ที่ใช้อยู่
@@ -153,6 +154,7 @@ Streamlit web app:
 ## Deployment (Railway)
 
 - **Platform:** Railway (cloud, 24/7)
+- **Region:** Southeast Asia (สำคัญ — ย้ายมาจาก US เพื่อแก้ geo-block ของ Binance/Bybit)
 - **Entry:** `start.py` รัน bot (thread) + dashboard (main) พร้อมกัน
 - **URL:** https://web-production-e07d8.up.railway.app/
 - **Auto-deploy:** push เข้า branch ที่ผูกไว้ → redeploy อัตโนมัติ (ต้องเปิด Auto Deploy ใน Settings)
@@ -193,8 +195,8 @@ py -3.12 -m pip install -r requirements.txt
 
 - **Python version:** ต้องใช้ 3.12 — 3.14 ใหม่เกินไป (pandas-ta, numba build fail). บน Windows เรียกด้วย `py -3.12`
 - **pip:** บน Windows ใช้ `python -m pip` / `py -3.12 -m pip` (pip ไม่อยู่ใน PATH)
-- **Geo-restriction:** Binance + Bybit block US (Railway) → ใช้ multi-exchange fallback (Kraken/Coinbase US-based)
-- **Coinbase candle cap:** ให้สูงสุด ~298 candles/request (น้อยกว่าที่ขอ 500) — พอสำหรับ ATR(200) แต่ valid น้อย
+- **Geo-restriction:** Binance + Bybit block US — *แก้แล้ว* ด้วยการตั้ง Railway region = Southeast Asia (ทุก exchange ใช้ได้). Multi-exchange fallback ยังคงไว้เพื่อ robustness
+- **Coinbase candle cap:** ให้สูงสุด ~298 candles/request (น้อยกว่าที่ขอ 500) — พอสำหรับ ATR(200) แต่ valid น้อย; Binance (primary) ไม่ cap
 - **pandas-ta column names:** BB columns เป็น `BBU_20_2.0_2.0` (มี `_2.0` ซ้ำ) ใน version 0.4.x
 - **Telegram:** ต้องกด `/start` กับ bot ก่อน ส่งครั้งแรกถึงจะได้
 - **Railway auto-deploy:** ถ้า deploy ค้าง commit เก่า → เช็ค Auto Deploy ON + branch ที่ผูก, trigger redeploy manual

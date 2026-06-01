@@ -2,9 +2,10 @@ import ccxt
 import pandas as pd
 from config import BYBIT_API_KEY, BYBIT_SECRET_KEY, SYMBOL, TIMEFRAME, CANDLE_LIMIT
 
-# เรียงตาม US-friendliness (Kraken/Coinbase = US-based, ไม่มี geo-block)
-# ลองทีละตัวจนกว่าจะได้ — robust ไม่ว่า deploy region ไหน
-EXCHANGE_PRIORITY = ["kraken", "coinbase", "kucoin", "gateio", "binance", "bybit"]
+# Railway region = Southeast Asia → ทุก exchange ใช้ได้ (ไม่มี geo-block)
+# Binance primary: liquidity สูงสุด + candle ไม่ cap
+# ตัวที่เหลือ = fallback robustness ถ้า primary down
+EXCHANGE_PRIORITY = ["binance", "bybit", "kraken", "coinbase", "kucoin", "gateio"]
 
 _exchange_cache = {}      # name -> ccxt instance
 _working_name = None      # exchange ที่ใช้ได้ล่าสุด
