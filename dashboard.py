@@ -5,7 +5,9 @@ import pandas as pd
 import time
 from datetime import datetime
 
-from data.fetcher import fetch_ohlcv, fetch_htf_ohlcv, fetch_ticker, current_exchange
+from data.fetcher import (
+    fetch_ohlcv, fetch_htf_ohlcv, fetch_ticker, current_exchange, EXCHANGE_PRIORITY,
+)
 from analysis.indicators import add_indicators
 from analysis.signals import generate_signal
 from config import SYMBOL, TIMEFRAME
@@ -17,20 +19,31 @@ caption_slot = st.empty()
 if "signal_history" not in st.session_state:
     st.session_state.signal_history = []
 
+# --- Sidebar: เลือก exchange ---
+st.sidebar.header("⚙️ Settings")
+AUTO_LABEL = "Auto (fallback)"
+exchange_choice = st.sidebar.selectbox(
+    "Exchange (public data)",
+    [AUTO_LABEL] + EXCHANGE_PRIORITY,
+    index=0,
+    help="Auto = ลองทีละตัวตาม priority. เลือกเจาะจง = บังคับใช้ตัวนั้น (Binance/Bybit อาจ block บาง region)",
+)
+selected_exchange = None if exchange_choice == AUTO_LABEL else exchange_choice
+
 @st.cache_data(ttl=30)
-def get_data():
-    df = fetch_ohlcv()
-    df_htf = fetch_htf_ohlcv()
+def get_data(exchange):
+    df = fetch_ohlcv(exchange=exchange)
+    df_htf = fetch_htf_ohlcv(exchange=exchange)
     df = add_indicators(df, df_htf)
     return df
 
 @st.cache_data(ttl=10)
-def get_ticker():
-    return fetch_ticker()
+def get_ticker(exchange):
+    return fetch_ticker(exchange=exchange)
 
 try:
-    df = get_data()
-    ticker = get_ticker()
+    df = get_data(selected_exchange)
+    ticker = get_ticker(selected_exchange)
     signal = generate_signal(df)
     latest = df.iloc[-1]
     error = None
