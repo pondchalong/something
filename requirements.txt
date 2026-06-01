@@ -1,0 +1,10 @@
+ccxt==4.5.56
+pandas==3.0.3
+pandas-ta==0.4.71b0
+python-telegram-bot==22.7
+python-dotenv==1.2.2
+requests==2.34.2
+streamlit==1.58.0
+plotly==6.7.0
+scikit-learn==1.8.0
+numpy==2.2.6
