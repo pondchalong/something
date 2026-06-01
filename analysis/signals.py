@@ -1,5 +1,5 @@
 import pandas as pd
-from config import ATR_MULTIPLIER, RISK_REWARD_RATIO
+from strategy.params import DEFAULT_PARAMS
 
 
 def _confluence_score(signal_type: str, row: pd.Series) -> int:
@@ -80,7 +80,7 @@ def _risk_level(row: pd.Series) -> str:
     return "MEDIUM"
 
 
-def generate_signal(df: pd.DataFrame) -> dict | None:
+def generate_signal(df: pd.DataFrame, params=DEFAULT_PARAMS) -> dict | None:
     latest = df.iloc[-1]
     prev = df.iloc[-2]
 
@@ -118,12 +118,12 @@ def generate_signal(df: pd.DataFrame) -> dict | None:
         return None
 
     score = _confluence_score(signal_type, latest)
-    # กรองสัญญาณคุณภาพต่ำ (confluence < 3 จาก 8)
-    if score < 3:
+    # กรองสัญญาณคุณภาพต่ำ (confluence ต่ำกว่า params.confluence_min)
+    if score < params.confluence_min:
         return None
 
-    sl_distance = atr * ATR_MULTIPLIER
-    tp_distance = sl_distance * RISK_REWARD_RATIO
+    sl_distance = atr * params.atr_multiplier
+    tp_distance = sl_distance * params.risk_reward
 
     if signal_type == "LONG":
         sl = round(close - sl_distance, 2)
@@ -137,7 +137,7 @@ def generate_signal(df: pd.DataFrame) -> dict | None:
         "price": close,
         "sl": sl,
         "tp": tp,
-        "rr": RISK_REWARD_RATIO,
+        "rr": params.risk_reward,
         "winrate": _winrate_from_score(score),
         "risk": _risk_level(latest),
         "confluence": score,

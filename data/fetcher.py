@@ -1,6 +1,9 @@
 import ccxt
 import pandas as pd
-from config import BYBIT_API_KEY, BYBIT_SECRET_KEY, SYMBOL, TIMEFRAME, CANDLE_LIMIT
+from config import (
+    BYBIT_API_KEY, BYBIT_SECRET_KEY, SYMBOL, TIMEFRAME, CANDLE_LIMIT,
+    BINANCE_TESTNET_API_KEY, BINANCE_TESTNET_SECRET,
+)
 
 # Railway region = Southeast Asia → ทุก exchange ใช้ได้ (ไม่มี geo-block)
 # Binance primary: liquidity สูงสุด + candle ไม่ cap
@@ -77,8 +80,23 @@ def fetch_htf_ohlcv(symbol=SYMBOL, timeframe=TIMEFRAME, limit=CANDLE_LIMIT, exch
     return fetch_ohlcv(symbol=symbol, timeframe=htf, limit=limit, exchange=exchange)
 
 
+def get_testnet_exchange():
+    """
+    Phase 2 — execute orders บน Binance testnet (demo account)
+    set_sandbox_mode(True) → ใช้ testnet.binancefuture.com
+    ต้องตั้ง BINANCE_TESTNET_API_KEY/SECRET (ขอจาก testnet.binancefuture.com)
+    """
+    ex = ccxt.binance({
+        "apiKey": BINANCE_TESTNET_API_KEY,
+        "secret": BINANCE_TESTNET_SECRET,
+        "options": {"defaultType": "future"},
+    })
+    ex.set_sandbox_mode(True)
+    return ex
+
+
 def get_private_exchange():
-    """สำหรับ Phase 2 — execute orders บน Bybit demo account"""
+    """(สำรอง) Bybit demo — เผื่อสลับ exchange execute ภายหลัง"""
     return ccxt.bybit({
         "apiKey": BYBIT_API_KEY,
         "secret": BYBIT_SECRET_KEY,

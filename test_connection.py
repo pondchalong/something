@@ -1,7 +1,7 @@
 """ทดสอบ connection ทุกอย่างก่อนรัน main"""
 import sys
 
-print("=== ทดสอบ Bybit Testnet ===")
+print("=== ทดสอบ Exchange (public, multi-fallback) ===")
 try:
     from data.fetcher import fetch_ohlcv, fetch_ticker
     ticker = fetch_ticker()
