@@ -5,14 +5,14 @@ import pandas as pd
 import time
 from datetime import datetime
 
-from data.fetcher import fetch_ohlcv, fetch_htf_ohlcv, fetch_ticker
+from data.fetcher import fetch_ohlcv, fetch_htf_ohlcv, fetch_ticker, current_exchange
 from analysis.indicators import add_indicators
 from analysis.signals import generate_signal
 from config import SYMBOL, TIMEFRAME
 
 st.set_page_config(page_title="Trade Signal Dashboard", page_icon="📈", layout="wide")
 st.title("📈 Trade Signal Dashboard")
-st.caption(f"{SYMBOL} | {TIMEFRAME} | Binance Testnet")
+caption_slot = st.empty()
 
 if "signal_history" not in st.session_state:
     st.session_state.signal_history = []
@@ -36,6 +36,8 @@ try:
     error = None
 except Exception as e:
     error = str(e)
+
+caption_slot.caption(f"{SYMBOL} | {TIMEFRAME} | {current_exchange()} (public data)")
 
 if error:
     st.error(f"เชื่อมต่อไม่ได้: {error}")
