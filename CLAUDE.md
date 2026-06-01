@@ -58,7 +58,7 @@
 ```
 something/
 ├── main.py                  # Bot loop: fetch → indicators → signal → Telegram alert (ทุก 60s)
-├── start.py                 # Railway entry point: รัน bot + dashboard พร้อมกัน
+├── start.py                 # Railway entry: รัน live_demo (signal+alert+execute) + dashboard
 ├── dashboard.py             # Streamlit web app (chart, SMC tab, signal history, exchange dropdown)
 ├── config.py                # env vars + settings
 ├── test_connection.py       # ทดสอบ exchange + indicators + signal + Telegram
@@ -206,7 +206,7 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 
 - **Platform:** Railway (cloud, 24/7)
 - **Region:** Southeast Asia (สำคัญ — ย้ายมาจาก US เพื่อแก้ geo-block ของ Binance/Bybit)
-- **Entry:** `start.py` รัน bot (thread) + dashboard (main) พร้อมกัน
+- **Entry:** `start.py` รัน `trading.live_demo` (thread) + dashboard (main) พร้อมกัน. live_demo = signal + Telegram alert + auto-execute (DRY_RUN guard). *(main.py = legacy signal-only, เก็บไว้)*
 - **URL:** https://web-production-e07d8.up.railway.app/
 - **Auto-deploy:** push เข้า branch ที่ผูกไว้ → redeploy อัตโนมัติ (ต้องเปิด Auto Deploy ใน Settings)
 - **GitHub:** pondchalong/something — work branch `something_1`, merge เข้า `main` ผ่าน PR
