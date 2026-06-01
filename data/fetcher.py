@@ -1,15 +1,15 @@
 import ccxt
 import pandas as pd
-from config import BINANCE_API_KEY, BINANCE_SECRET_KEY, SYMBOL, TIMEFRAME, CANDLE_LIMIT
+from config import BYBIT_API_KEY, BYBIT_SECRET_KEY, SYMBOL, TIMEFRAME, CANDLE_LIMIT
 
 
 def get_exchange():
-    exchange = ccxt.binance({
-        "apiKey": BINANCE_API_KEY,
-        "secret": BINANCE_SECRET_KEY,
-        "options": {"defaultType": "future"},
+    exchange = ccxt.bybit({
+        "apiKey": BYBIT_API_KEY,
+        "secret": BYBIT_SECRET_KEY,
+        "options": {"defaultType": "linear"},  # USDT perpetual
     })
-    exchange.set_sandbox_mode(True)  # ใช้ testnet
+    exchange.set_sandbox_mode(True)  # Bybit testnet
     return exchange
 
 
