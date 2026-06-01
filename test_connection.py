@@ -1,7 +1,7 @@
 """ทดสอบ connection ทุกอย่างก่อนรัน main"""
 import sys
 
-print("=== ทดสอบ Binance Testnet ===")
+print("=== ทดสอบ Bybit Testnet ===")
 try:
     from data.fetcher import fetch_ohlcv, fetch_ticker
     ticker = fetch_ticker()
