@@ -10,7 +10,13 @@ from data.fetcher import (
 )
 from analysis.indicators import add_indicators
 from analysis.signals import generate_signal
-from config import SYMBOL, TIMEFRAME
+from config import SYMBOL, TIMEFRAME, DRY_RUN
+
+# Phase 2
+from strategy.params import load_active, save_active, StrategyParams
+from backtest.engine import run_backtest
+from backtest.results import save_result, load_result, load_candidate
+from trading.executor import load_trade_log
 
 st.set_page_config(page_title="Trade Signal Dashboard", page_icon="📈", layout="wide")
 st.title("📈 Trade Signal Dashboard")
@@ -30,11 +36,126 @@ exchange_choice = st.sidebar.selectbox(
 )
 selected_exchange = None if exchange_choice == AUTO_LABEL else exchange_choice
 
+# --- Sidebar: page navigation (Phase 2) ---
+page = st.sidebar.radio("หน้า", ["Live Signal", "Backtest", "Optimizer", "Demo Trades"])
+
+
+def _equity_chart(equity_curve):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(y=equity_curve, mode="lines", line=dict(color="#00c853", width=2)))
+    fig.update_layout(height=300, template="plotly_dark", margin=dict(l=0, r=0, t=10, b=0),
+                      yaxis_title="Equity (x เริ่มต้น)")
+    return fig
+
+
+def _show_metrics(m: dict):
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Trades", m.get("num_trades", 0))
+    c1.metric("Win Rate", f"{m.get('winrate', 0):.1f}%")
+    c2.metric("Total Return", f"{m.get('total_return', 0)*100:+.1f}%")
+    c2.metric("Max Drawdown", f"{m.get('max_drawdown', 0)*100:.1f}%")
+    c3.metric("Profit Factor", f"{m.get('profit_factor', 0):.2f}")
+    c3.metric("Sharpe", f"{m.get('sharpe', 0):.2f}")
+    c4.metric("Avg Win", f"{m.get('avg_win', 0)*100:+.2f}%")
+    c4.metric("Avg Loss", f"{m.get('avg_loss', 0)*100:+.2f}%")
+
+
+def render_backtest():
+    st.header("📊 Backtest")
+    params = load_active()
+    st.caption(f"Active params: {params.to_dict()}")
+    limit = st.number_input("จำนวน candle", 500, 5000, 1500, step=500)
+    if st.button("▶️ รัน Backtest (active params)"):
+        with st.spinner("กำลัง backtest... (อาจใช้เวลาสักครู่)"):
+            df = fetch_ohlcv(timeframe=params.timeframe, limit=int(limit))
+            df_htf = fetch_htf_ohlcv(timeframe=params.timeframe, limit=int(limit))
+            res = run_backtest(df, params, df_htf)
+            save_result("latest_backtest", res)
+        st.success("เสร็จ")
+
+    try:
+        res = load_result("latest_backtest")
+    except Exception:
+        res = None
+    if not res:
+        st.info("ยังไม่มีผล — กดปุ่มรัน Backtest ด้านบน")
+        return
+    st.subheader(f"ผลล่าสุด ({res.get('timestamp', '')})")
+    _show_metrics(res["metrics"])
+    st.plotly_chart(_equity_chart(res["equity_curve"]), width="stretch")
+    if res["trades"]:
+        st.subheader("Trades")
+        st.dataframe(pd.DataFrame(res["trades"][::-1]), width="stretch", hide_index=True)
+
+
+def render_optimizer():
+    st.header("🧠 Optimizer — หา strategy ที่ดีสุด")
+    st.caption("รัน optimizer ผ่าน CLI: `py -3.12 -m backtest.optimizer --trials 100` (ใช้เวลาหลายนาที)")
+    cand = load_candidate()
+    if not cand:
+        st.info("ยังไม่มี candidate — รัน optimizer ก่อน")
+        return
+    st.subheader(f"Candidate (best params) — {cand.get('timestamp', '')}")
+    st.json(cand["params"])
+
+    tm, te = cand["train_metrics"], cand["test_metrics"]
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Train (70%)**")
+        st.metric("Sharpe", f"{tm['sharpe']:.2f}")
+        st.metric("Return", f"{tm['total_return']*100:+.1f}%")
+        st.metric("Win Rate", f"{tm['winrate']:.1f}%")
+    with col2:
+        st.markdown("**Test (30%) — out of sample**")
+        st.metric("Sharpe", f"{te['sharpe']:.2f}")
+        st.metric("Return", f"{te['total_return']*100:+.1f}%")
+        st.metric("Win Rate", f"{te['winrate']:.1f}%")
+
+    # Overfit check
+    if tm["sharpe"] > 0 and te["sharpe"] < tm["sharpe"] * 0.5:
+        st.warning("⚠️ Test ต่ำกว่า Train มาก — strategy อาจ overfit ใช้ด้วยความระวัง")
+    elif te["sharpe"] > 0:
+        st.success("✓ Test ยัง positive — robust พอควร")
+    else:
+        st.error("Test ไม่กำไร — ไม่แนะนำให้ apply")
+
+    st.divider()
+    st.markdown("**Apply strategy** — executor (live demo) จะใช้ params นี้")
+    if st.button("✅ Apply candidate เป็น active strategy"):
+        save_active(StrategyParams.from_dict(cand["params"]))
+        st.success("Apply แล้ว — live demo รอบถัดไปจะใช้ params นี้")
+
+
+def render_demo():
+    st.header("🤖 Live Demo Trades (Binance testnet)")
+    st.caption(f"DRY_RUN = {DRY_RUN}  ({'log อย่างเดียว ไม่ยิง order จริง' if DRY_RUN else 'ยิง order จริงบน testnet'})")
+    params = load_active()
+    st.caption(f"Active params: {params.to_dict()}")
+    log = load_trade_log()
+    if not log:
+        st.info("ยังไม่มี trade — รัน `py -3.12 -m trading.live_demo`")
+        return
+    st.metric("จำนวน trade ทั้งหมด", len(log))
+    st.dataframe(pd.DataFrame(log[::-1]), width="stretch", hide_index=True)
+
+
+# Dispatch Phase 2 pages (Live Signal = code ด้านล่าง)
+if page == "Backtest":
+    render_backtest(); st.stop()
+if page == "Optimizer":
+    render_optimizer(); st.stop()
+if page == "Demo Trades":
+    render_demo(); st.stop()
+
+
+active = load_active()
+
 @st.cache_data(ttl=30)
-def get_data(exchange):
-    df = fetch_ohlcv(exchange=exchange)
-    df_htf = fetch_htf_ohlcv(exchange=exchange)
-    df = add_indicators(df, df_htf)
+def get_data(exchange, params_dict):
+    params = StrategyParams.from_dict(params_dict)
+    df = fetch_ohlcv(exchange=exchange, timeframe=params.timeframe)
+    df_htf = fetch_htf_ohlcv(exchange=exchange, timeframe=params.timeframe)
+    df = add_indicators(df, df_htf, params)
     return df
 
 @st.cache_data(ttl=10)
@@ -42,15 +163,15 @@ def get_ticker(exchange):
     return fetch_ticker(exchange=exchange)
 
 try:
-    df = get_data(selected_exchange)
+    df = get_data(selected_exchange, active.to_dict())
     ticker = get_ticker(selected_exchange)
-    signal = generate_signal(df)
+    signal = generate_signal(df, active)
     latest = df.iloc[-1]
     error = None
 except Exception as e:
     error = str(e)
 
-caption_slot.caption(f"{SYMBOL} | {TIMEFRAME} | {current_exchange()} (public data)")
+caption_slot.caption(f"{SYMBOL} | {active.timeframe} | {current_exchange()} (public data)")
 
 if error:
     st.error(f"เชื่อมต่อไม่ได้: {error}")

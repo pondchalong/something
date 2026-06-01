@@ -4,3 +4,8 @@ __pycache__/
 *.pyo
 .DS_Store
 sourcecode_indicators/
+
+# Phase 2 runtime data
+strategy/active_params.json
+backtest/results/
+trading/trade_log.json

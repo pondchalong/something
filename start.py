@@ -10,7 +10,9 @@ PORT = os.getenv("PORT", "8501")
 
 
 def run_bot():
-    subprocess.run([sys.executable, "main.py"])
+    # live_demo = signal + Telegram alert + auto-execute (DRY_RUN guard)
+    # superset ของ main.py — แทน main ได้เลย (DRY_RUN=true → log อย่างเดียว ไม่ trade)
+    subprocess.run([sys.executable, "-m", "trading.live_demo"])
 
 
 def run_dashboard():

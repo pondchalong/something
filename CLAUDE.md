@@ -26,14 +26,14 @@
 เครื่องมือวิเคราะห์ + แจ้งเตือนสัญญาณเทรด crypto (BTC/USDT) แบบ realtime
 รันบน cloud 24/7 เปิดดูจากมือถือได้ ส่ง alert ผ่าน Telegram
 
-**สถานะปัจจุบัน: Phase 1 เสร็จ + deploy แล้ว**
+**สถานะปัจจุบัน: Phase 1 เสร็จ + deploy แล้ว · Phase 2 โครงสร้างเสร็จ (รอ testnet key + deploy)**
 
 ### Requirements
 
 | Phase | Scope | สถานะ |
 |---|---|---|
 | **Phase 1 (min)** | เครื่องมือวิเคราะห์ + แจ้งเตือนจุดเข้า/ออก เป็นสัญญาณเทรด บอกความเสี่ยง + winrate | ✅ เสร็จ |
-| **Phase 2 (max)** | Bot ที่เข้า trade เอง + เรียนรู้เองบน test account เพื่อหา strategy ที่ทำกำไรดีสุด | ⏳ ยังไม่เริ่ม |
+| **Phase 2 (max)** | Bot ที่เข้า trade เอง + เรียนรู้เองบน test account เพื่อหา strategy ที่ทำกำไรดีสุด | 🔨 backtest + optimizer ใช้ได้, executor dry-run ใช้ได้ — รอ Binance testnet key + deploy |
 
 ผู้พัฒนาเพิ่งเริ่มเรียน Python — อธิบาย concept เมื่อจำเป็น
 
@@ -48,6 +48,7 @@
 - **scikit-learn** — เผื่อใช้ (K-means เขียนเองใน SuperTrend)
 - **python-telegram-bot / requests** — alert
 - **streamlit / plotly** — dashboard
+- **optuna** — strategy optimizer (Phase 2)
 - **Railway** — cloud hosting
 
 ---
@@ -57,7 +58,7 @@
 ```
 something/
 ├── main.py                  # Bot loop: fetch → indicators → signal → Telegram alert (ทุก 60s)
-├── start.py                 # Railway entry point: รัน bot + dashboard พร้อมกัน
+├── start.py                 # Railway entry: รัน live_demo (signal+alert+execute) + dashboard
 ├── dashboard.py             # Streamlit web app (chart, SMC tab, signal history, exchange dropdown)
 ├── config.py                # env vars + settings
 ├── test_connection.py       # ทดสอบ exchange + indicators + signal + Telegram
@@ -67,19 +68,33 @@ something/
 ├── data/
 │   └── fetcher.py           # Multi-exchange fallback (ดู Data Layer)
 ├── analysis/
-│   ├── indicators.py        # EMA, RSI, MACD, BB, ATR + เรียก advanced
+│   ├── indicators.py        # EMA, RSI, MACD, BB, ATR + เรียก advanced (รับ params)
 │   ├── indicators_advanced.py  # 4 indicators จาก TradingView (ดู Indicators)
-│   └── signals.py           # Signal engine + confluence scoring
+│   └── signals.py           # Signal engine + confluence scoring (รับ params)
 ├── alerts/
 │   └── telegram.py          # ส่ง Telegram message
 ├── utils/
 │   └── logger.py            # logging
+├── strategy/                # Phase 2
+│   ├── params.py            # StrategyParams dataclass + DEFAULT + load/save active
+│   └── active_params.json   # strategy ที่ approve แล้ว (gitignored, runtime)
+├── backtest/                # Phase 2
+│   ├── engine.py            # simulate() + run_backtest() (reuse generate_signal)
+│   ├── metrics.py           # winrate, return, drawdown, Sharpe, equity curve
+│   ├── optimizer.py         # Optuna study + train/test split
+│   ├── results.py           # save/load result + candidate
+│   └── results/             # ผล backtest + candidate.json (gitignored, runtime)
+├── trading/                 # Phase 2
+│   ├── executor.py          # execute_signal() บน Binance testnet (DRY_RUN guard)
+│   ├── live_demo.py         # live demo loop (signal → execute)
+│   └── trade_log.json       # log การเทรด (gitignored, runtime)
 └── sourcecode_indicators/   # Pine Script ต้นฉบับ (gitignored, ใช้ reference)
 ```
 
 **Data flow:**
 ```
-fetcher (OHLCV) → indicators (LTF + HTF) → signals (confluence) → alert/dashboard
+Phase 1:  fetcher (OHLCV) → indicators (LTF+HTF, params) → signals (confluence, params) → alert/dashboard
+Phase 2:  historical → backtest engine → metrics → optimizer (Optuna) → candidate → [approve] → active_params → executor (testnet)
 ```
 
 ---
@@ -95,7 +110,8 @@ fetcher (OHLCV) → indicators (LTF + HTF) → signals (confluence) → alert/da
 - ใช้ **public data เท่านั้น** (OHLCV, ticker) ไม่ต้อง API key
 - `fetch_ohlcv(exchange=None)` → None = auto fallback, ระบุชื่อ = บังคับใช้ตัวนั้น
 - `current_exchange()` → ชื่อ exchange ที่ใช้อยู่
-- `get_private_exchange()` → Bybit + API key เก็บไว้สำหรับ Phase 2 (execute orders)
+- `get_testnet_exchange()` → Binance testnet (sandbox) + API key — Phase 2 execute orders
+- `get_private_exchange()` → Bybit (สำรอง เผื่อสลับ exchange execute)
 
 **Higher timeframe (HTF)** สำหรับ MTF MACD: `HTF_MAP` map LTF → HTF (เช่น 15m → 1h)
 
@@ -125,9 +141,10 @@ EMA20/50, RSI(14), MACD(12,26,9), Bollinger Bands(20,2), ATR(14)
 
 - **Trigger:** SuperTrend flip (หลัก) หรือ MACD histogram cross + EMA alignment (รอง)
 - **Confluence score 0–8:** นับจาก EMA, RSI zone, MACD, SuperTrend, VIDYA, HTF MACD, SMC structure
-- **กรอง:** ถ้า confluence < 3 → ไม่ส่งสัญญาณ (ลด false signal)
+- **กรอง:** ถ้า confluence < `params.confluence_min` → ไม่ส่งสัญญาณ (ลด false signal)
 - **Output:** signal (LONG/SHORT), entry, SL, TP, R:R, winrate (40–85% จาก score), risk (จาก volatility cluster + RSI)
-- **SL/TP:** SL = ATR × `ATR_MULTIPLIER` (1.5), TP = SL × `RISK_REWARD_RATIO` (2.0)
+- **SL/TP:** SL = ATR × `params.atr_multiplier`, TP = SL × `params.risk_reward`
+- **Parameterized (Phase 2):** `generate_signal(df, params)` + `add_indicators(df, df_htf, params)` รับ `StrategyParams` (default = ค่าเดิม → Phase 1 ทำงานเหมือนเดิม). optimizer ปรับ params ได้
 
 ---
 
@@ -141,13 +158,47 @@ EMA20/50, RSI(14), MACD(12,26,9), Bollinger Bands(20,2), ATR(14)
 
 ## Dashboard (dashboard.py)
 
-Streamlit web app:
-- **Sidebar:** dropdown เลือก exchange (Auto fallback หรือเจาะจง)
-- **Metrics:** ราคา, RSI, SuperTrend, Volatility, VIDYA, HTF MACD, Vol Delta
-- **Signal box:** LONG/SHORT พร้อม SL/TP/winrate/confluence/risk
-- **Tab 1 (Main):** Candlestick + EMA/VIDYA/SuperTrend/BB, RSI, MACD, Vol Delta
-- **Tab 2 (SMC):** FVG zones, Order Blocks, BoS/CHoCH labels
-- **Signal history table** + auto-refresh ทุก 30s
+Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Optimizer / Demo Trades
+
+**Live Signal** (ใช้ active params):
+- Sidebar: dropdown เลือก exchange (Auto fallback หรือเจาะจง)
+- Metrics: ราคา, RSI, SuperTrend, Volatility, VIDYA, HTF MACD, Vol Delta
+- Signal box: LONG/SHORT พร้อม SL/TP/winrate/confluence/risk
+- Tab Main: Candlestick + EMA/VIDYA/SuperTrend/BB, RSI, MACD, Vol Delta
+- Tab SMC: FVG zones, Order Blocks, BoS/CHoCH labels
+- Signal history table + auto-refresh ทุก 30s
+
+**Backtest / Optimizer / Demo Trades** (Phase 2):
+- Backtest: ปุ่มรัน backtest (active params) → metrics + equity curve + trade list
+- Optimizer: แสดง candidate (best params, train vs test, overfit warning) + ปุ่ม **Apply** (manual approve → เขียน active_params.json)
+- Demo Trades: trade log + DRY_RUN status
+
+---
+
+## Phase 2 — Backtest / Optimizer / Executor
+
+**Backtest (backtest/engine.py):**
+- `simulate(df, params, fee, start, end)` — loop candle [start,end), reuse `generate_signal()` 100%, จำลอง SL/TP hit, fee 0.04%×2
+- `run_backtest(df, params, df_htf)` — add_indicators + simulate ทั้ง df
+- indicators ทุกตัวเป็น **causal** (ใช้แค่อดีต) → ไม่มี lookahead bias
+- entry = close ของ candle ที่เกิด signal, exit เช็คจาก candle ถัดไป (high/low แตะ SL/TP; โดนทั้งคู่ = SL ก่อน conservative)
+
+**Optimizer (backtest/optimizer.py):**
+- Optuna maximize Sharpe — search: `atr_multiplier, risk_reward, confluence_min, st_factor, timeframe`
+- **Train/test split 70/30:** add_indicators บน full df ครั้งเดียว → simulate train [warmup,k) + test [k,n) (test ได้ indicator ที่ warm จาก train — กันปัญหา warmup กิน test set)
+- penalize ถ้า train trades < 10; overfit check: test Sharpe < train×0.5 → เตือน
+- best params → `save_candidate()` (รอ approve, ไม่ auto-apply)
+- รัน: `py -3.12 -m backtest.optimizer --trials 100`
+
+**Executor (trading/executor.py):**
+- `execute_signal(signal)` — market entry + SL (STOP_MARKET) + TP (TAKE_PROFIT_MARKET) reduce-only บน Binance testnet
+- **Position sizing risk-based:** `size = (balance × RISK_PER_TRADE) / sl_distance`
+- 1 position ต่อครั้ง · **`DRY_RUN=True` (default) = log อย่างเดียว ไม่ยิง order** → ทดสอบ logic ก่อนเปิดจริง
+- `trading/live_demo.py` — loop: signal → execute (ใช้ active params)
+
+**Self-learning scope:** ตอนนี้ = optimize params ของ strategy ปัจจุบัน (ยังไม่ใช่ RL discover strategy ใหม่)
+
+**Promote (manual approve):** optimizer หา candidate → ดูใน dashboard → กด Apply → executor ใช้ params ใหม่ (ต้อง approve เสมอ ไม่ auto)
 
 ---
 
@@ -155,21 +206,24 @@ Streamlit web app:
 
 - **Platform:** Railway (cloud, 24/7)
 - **Region:** Southeast Asia (สำคัญ — ย้ายมาจาก US เพื่อแก้ geo-block ของ Binance/Bybit)
-- **Entry:** `start.py` รัน bot (thread) + dashboard (main) พร้อมกัน
+- **Entry:** `start.py` รัน `trading.live_demo` (thread) + dashboard (main) พร้อมกัน. live_demo = signal + Telegram alert + auto-execute (DRY_RUN guard). *(main.py = legacy signal-only, เก็บไว้)*
 - **URL:** https://web-production-e07d8.up.railway.app/
 - **Auto-deploy:** push เข้า branch ที่ผูกไว้ → redeploy อัตโนมัติ (ต้องเปิด Auto Deploy ใน Settings)
 - **GitHub:** pondchalong/something — work branch `something_1`, merge เข้า `main` ผ่าน PR
 
 ### Environment Variables (Railway → Variables)
 ```
-TELEGRAM_BOT_TOKEN   = (จาก BotFather)
-TELEGRAM_CHAT_ID     = (จาก @userinfobot)
-SYMBOL               = BTC/USDT
-TIMEFRAME            = 15m
-BYBIT_API_KEY        = (Phase 2 เท่านั้น)
-BYBIT_SECRET_KEY     = (Phase 2 เท่านั้น)
+TELEGRAM_BOT_TOKEN        = (จาก BotFather)
+TELEGRAM_CHAT_ID          = (จาก @userinfobot)
+SYMBOL                    = BTC/USDT
+TIMEFRAME                 = 15m
+# Phase 2 (auto-execute)
+BINANCE_TESTNET_API_KEY   = (จาก testnet.binancefuture.com)
+BINANCE_TESTNET_SECRET    = (จาก testnet.binancefuture.com)
+RISK_PER_TRADE            = 0.01   # 1% ต่อไม้
+DRY_RUN                   = true   # true = ไม่ยิง order จริง (ตั้ง false เมื่อพร้อม)
 ```
-Phase 1 ไม่ต้องใช้ exchange API key (public data)
+Phase 1 ไม่ต้องใช้ exchange API key (public data). Phase 2 ต้องมี Binance testnet key
 
 ---
 
@@ -187,6 +241,16 @@ py -3.12 test_connection.py
 
 # ติดตั้ง deps
 py -3.12 -m pip install -r requirements.txt
+
+# --- Phase 2 ---
+# backtest (active params)
+py -3.12 -m backtest.engine --limit 1500
+
+# optimizer (หา strategy ดีสุด — ใช้เวลาหลายนาที)
+py -3.12 -m backtest.optimizer --trials 100 --limit 2000
+
+# live demo (DRY_RUN=true = ทดสอบ ไม่ยิง order จริง)
+py -3.12 -m trading.live_demo
 ```
 
 ---
@@ -203,10 +267,17 @@ py -3.12 -m pip install -r requirements.txt
 
 ---
 
-## Roadmap — Phase 2 (ยังไม่เริ่ม)
+## Roadmap — Phase 2
 
-- Auto-execute trade บน Bybit demo account (ใช้ `get_private_exchange()`)
-- Backtest engine (backtesting.py / vectorbt)
-- Strategy optimizer (optuna grid search / RL)
-- Performance logger (PnL, drawdown, winrate จริง)
-- Auto-promote strategy ที่ดีสุด (manual approve ก่อน live)
+**เสร็จแล้ว (โครงสร้าง):**
+- ✅ Custom backtest engine + metrics (reuse generate_signal)
+- ✅ Optuna optimizer + train/test split (กัน overfit)
+- ✅ Demo executor บน Binance testnet (DRY_RUN guard, risk-based sizing)
+- ✅ Dashboard: Backtest / Optimizer / Demo Trades + Apply (manual approve)
+
+**เหลือ:**
+- ⏳ user สมัคร Binance testnet + ขอ API key → ตั้ง env vars
+- ⏳ ทดสอบ order จริงบน testnet (DRY_RUN=false) 1 ไม้
+- ⏳ deploy live_demo บน Railway (เพิ่ม start option หรือแยก service)
+- ⏳ optimize trials เยอะ (100+) หา params ที่ robust (test ยัง positive)
+- 🔮 อนาคต: RL discover strategy ใหม่, walk-forward optimization, slippage model
