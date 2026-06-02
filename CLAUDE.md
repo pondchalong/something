@@ -192,6 +192,7 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 
 **Executor (trading/executor.py):**
 - `execute_signal(signal)` — market entry + SL (STOP_MARKET) + TP (TAKE_PROFIT_MARKET) reduce-only บน Binance testnet
+- **Binance testnet connect:** ccxt 4.5+ ตัด `set_sandbox_mode()` สำหรับ futures → `get_testnet_exchange()` ใช้ `binanceusdm` + override `fapi*` endpoints เป็น `urls['test']` เอง + `fetchCurrencies=False` (ดู Known Issues). verified order จริงแล้ว
 - **Position sizing risk-based:** `size = (balance × RISK_PER_TRADE) / sl_distance`
 - 1 position ต่อครั้ง · **`DRY_RUN=True` (default) = log อย่างเดียว ไม่ยิง order** → ทดสอบ logic ก่อนเปิดจริง
 - `trading/live_demo.py` — loop: signal → execute (ใช้ active params)
@@ -263,6 +264,7 @@ py -3.12 -m trading.live_demo
 - **Coinbase candle cap:** ให้สูงสุด ~298 candles/request (น้อยกว่าที่ขอ 500) — พอสำหรับ ATR(200) แต่ valid น้อย; Binance (primary) ไม่ cap
 - **pandas-ta column names:** BB columns เป็น `BBU_20_2.0_2.0` (มี `_2.0` ซ้ำ) ใน version 0.4.x
 - **Telegram:** ต้องกด `/start` กับ bot ก่อน ส่งครั้งแรกถึงจะได้
+- **ccxt Binance futures testnet:** ccxt 4.5+ `set_sandbox_mode(True)` บน binance/binanceusdm futures → raise `NotSupported` (deprecated). แก้ใน `get_testnet_exchange()`: ใช้ `binanceusdm` + copy `urls['test']` fapi endpoints → `urls['api']` + `options.fetchCurrencies=False` (เลี่ยง sapi ที่ไม่มี testnet URL). Bybit testnet ยัง support set_sandbox_mode ปกติ (เก็บเป็น fallback)
 - **Railway auto-deploy:** ถ้า deploy ค้าง commit เก่า → เช็ค Auto Deploy ON + branch ที่ผูก, trigger redeploy manual
 
 ---
