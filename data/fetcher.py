@@ -80,18 +80,27 @@ def fetch_htf_ohlcv(symbol=SYMBOL, timeframe=TIMEFRAME, limit=CANDLE_LIMIT, exch
     return fetch_ohlcv(symbol=symbol, timeframe=htf, limit=limit, exchange=exchange)
 
 
+# fapi endpoints ที่ต้อง override เป็น testnet
+_FAPI_KEYS = ["fapiPublic", "fapiPublicV2", "fapiPublicV3",
+              "fapiPrivate", "fapiPrivateV2", "fapiPrivateV3", "fapiData"]
+
 def get_testnet_exchange():
     """
-    Phase 2 — execute orders บน Binance testnet (demo account)
-    set_sandbox_mode(True) → ใช้ testnet.binancefuture.com
+    Phase 2 — execute orders บน Binance futures testnet (demo)
     ต้องตั้ง BINANCE_TESTNET_API_KEY/SECRET (ขอจาก testnet.binancefuture.com)
+
+    หมายเหตุ: ccxt 4.5+ ตัด set_sandbox_mode สำหรับ futures (raise NotSupported)
+    → override fapi endpoints เป็น testnet เอง + ปิด fetchCurrencies (เลี่ยง sapi
+      ที่ไม่มี testnet URL). ใช้ binanceusdm (futures-only class)
     """
-    ex = ccxt.binance({
+    ex = ccxt.binanceusdm({
         "apiKey": BINANCE_TESTNET_API_KEY,
         "secret": BINANCE_TESTNET_SECRET,
-        "options": {"defaultType": "future"},
+        "options": {"defaultType": "future", "fetchCurrencies": False},
     })
-    ex.set_sandbox_mode(True)
+    for k in _FAPI_KEYS:
+        if k in ex.urls["test"]:
+            ex.urls["api"][k] = ex.urls["test"][k]
     return ex
 
 
