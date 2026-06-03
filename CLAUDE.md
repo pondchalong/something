@@ -223,8 +223,11 @@ BINANCE_TESTNET_API_KEY   = (จาก testnet.binancefuture.com)
 BINANCE_TESTNET_SECRET    = (จาก testnet.binancefuture.com)
 RISK_PER_TRADE            = 0.01   # 1% ต่อไม้
 DRY_RUN                   = true   # true = ไม่ยิง order จริง (ตั้ง false เมื่อพร้อม)
+DATA_DIR                  = /data  # Railway Volume mount → trade_log ถาวร (ไม่ตั้ง = ephemeral)
 ```
 Phase 1 ไม่ต้องใช้ exchange API key (public data). Phase 2 ต้องมี Binance testnet key
+
+**Persistent log (Railway Volume):** trade_log.json บน Railway filesystem = ephemeral (หายเมื่อ redeploy). เก็บถาวร → สร้าง Volume mount `/data` + ตั้ง env `DATA_DIR=/data`. executor เขียน log ที่ `DATA_DIR` ถ้าตั้ง (ดู `config.DATA_DIR`). active_params มาจาก git อยู่แล้ว ไม่ต้อง volume
 
 ---
 

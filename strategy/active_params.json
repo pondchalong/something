@@ -1,11 +1,11 @@
 {
   "atr_multiplier": 1.5,
   "risk_reward": 2.0,
-  "confluence_min": 2,
-  "st_factor": 1.5,
+  "confluence_min": 3,
+  "st_factor": 3.0,
   "st_atr_len": 10,
   "ema_fast": 20,
   "ema_slow": 50,
   "rsi_len": 14,
-  "timeframe": "1m"
+  "timeframe": "15m"
 }

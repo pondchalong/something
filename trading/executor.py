@@ -13,11 +13,14 @@ from datetime import datetime
 
 import ccxt
 
-from config import SYMBOL, RISK_PER_TRADE, DRY_RUN
+from config import SYMBOL, RISK_PER_TRADE, DRY_RUN, DATA_DIR
 from data.fetcher import get_testnet_exchange
 from utils.logger import logger
 
-TRADE_LOG = os.path.join(os.path.dirname(__file__), "trade_log.json")
+# DATA_DIR (Railway Volume) → log ถาวร; ไม่ตั้ง (local) → folder ของ module
+_LOG_DIR = DATA_DIR if DATA_DIR else os.path.dirname(__file__)
+os.makedirs(_LOG_DIR, exist_ok=True)
+TRADE_LOG = os.path.join(_LOG_DIR, "trade_log.json")
 
 # Binance testnet ไม่เสถียร (502/timeout บ่อย) → retry transient errors
 _TRANSIENT_KW = ("502", "503", "-1007", "timeout", "bad gateway", "backend", "temporarily")

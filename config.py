@@ -23,3 +23,8 @@ BINANCE_TESTNET_API_KEY = os.getenv("BINANCE_TESTNET_API_KEY", "").strip()
 BINANCE_TESTNET_SECRET = os.getenv("BINANCE_TESTNET_SECRET", "").strip()
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))   # 1% ของ balance ต่อไม้
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"      # true = log อย่างเดียว ไม่ยิง order จริง
+
+# Railway Volume (persistent disk) สำหรับ runtime data ที่ต้องเก็บถาวร เช่น trade_log
+# ตั้ง DATA_DIR = mount path ของ volume (เช่น /data) → log ไม่หายเมื่อ redeploy
+# ไม่ตั้ง (local) → ใช้ folder ของ module เอง
+DATA_DIR = os.getenv("DATA_DIR", "").strip()
