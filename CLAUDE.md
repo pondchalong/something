@@ -77,7 +77,7 @@ something/
 │   └── logger.py            # logging
 ├── strategy/                # Phase 2
 │   ├── params.py            # StrategyParams dataclass + DEFAULT + load/save active
-│   └── active_params.json   # strategy ที่ approve แล้ว (gitignored, runtime)
+│   └── active_params.json   # strategy ที่ใช้จริง (committed — sync ไป Railway)
 ├── backtest/                # Phase 2
 │   ├── engine.py            # simulate() + run_backtest() (reuse generate_signal)
 │   ├── metrics.py           # winrate, return, drawdown, Sharpe, equity curve
