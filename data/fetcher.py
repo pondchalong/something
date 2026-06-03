@@ -93,6 +93,15 @@ def get_testnet_exchange():
     → override fapi endpoints เป็น testnet เอง + ปิด fetchCurrencies (เลี่ยง sapi
       ที่ไม่มี testnet URL). ใช้ binanceusdm (futures-only class)
     """
+    # diagnostic: log ความยาว key (ไม่เปิด key เต็ม) — ช่วยเช็คว่า env ถูกตั้งไหม
+    print(f"[testnet] api_key len={len(BINANCE_TESTNET_API_KEY)} "
+          f"secret len={len(BINANCE_TESTNET_SECRET)}")
+    if not BINANCE_TESTNET_API_KEY or not BINANCE_TESTNET_SECRET:
+        raise ValueError(
+            "BINANCE_TESTNET_API_KEY/SECRET ยังไม่ถูกตั้ง — เช็ค Railway Variables "
+            "(ชื่อต้องตรงเป๊ะ ไม่มี quote/space)"
+        )
+
     ex = ccxt.binanceusdm({
         "apiKey": BINANCE_TESTNET_API_KEY,
         "secret": BINANCE_TESTNET_SECRET,

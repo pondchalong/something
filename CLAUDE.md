@@ -77,7 +77,7 @@ something/
 │   └── logger.py            # logging
 ├── strategy/                # Phase 2
 │   ├── params.py            # StrategyParams dataclass + DEFAULT + load/save active
-│   └── active_params.json   # strategy ที่ approve แล้ว (gitignored, runtime)
+│   └── active_params.json   # strategy ที่ใช้จริง (committed — sync ไป Railway)
 ├── backtest/                # Phase 2
 │   ├── engine.py            # simulate() + run_backtest() (reuse generate_signal)
 │   ├── metrics.py           # winrate, return, drawdown, Sharpe, equity curve
@@ -265,6 +265,7 @@ py -3.12 -m trading.live_demo
 - **pandas-ta column names:** BB columns เป็น `BBU_20_2.0_2.0` (มี `_2.0` ซ้ำ) ใน version 0.4.x
 - **Telegram:** ต้องกด `/start` กับ bot ก่อน ส่งครั้งแรกถึงจะได้
 - **ccxt Binance futures testnet:** ccxt 4.5+ `set_sandbox_mode(True)` บน binance/binanceusdm futures → raise `NotSupported` (deprecated). แก้ใน `get_testnet_exchange()`: ใช้ `binanceusdm` + copy `urls['test']` fapi endpoints → `urls['api']` + `options.fetchCurrencies=False` (เลี่ยง sapi ที่ไม่มี testnet URL). Bybit testnet ยัง support set_sandbox_mode ปกติ (เก็บเป็น fallback)
+- **Binance testnet ไม่เสถียร:** 502 Bad Gateway / -1007 timeout บ่อย (testnet best-effort). `executor._retry()` ลองซ้ำ transient errors 3 ครั้ง + verify position หลัง entry (กัน position เปลือยตอน "execution unknown") + ปิด position ถ้าตั้ง SL/TP ไม่ได้
 - **Railway auto-deploy:** ถ้า deploy ค้าง commit เก่า → เช็ค Auto Deploy ON + branch ที่ผูก, trigger redeploy manual
 
 ---
