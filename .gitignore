@@ -8,4 +8,5 @@ sourcecode_indicators/
 # Phase 2 runtime data
 backtest/results/
 trading/trade_log.json
+trading/open_trade.json
 # หมายเหตุ: strategy/active_params.json = strategy ที่ใช้จริง → commit เพื่อ sync ไป Railway

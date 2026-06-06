@@ -16,7 +16,7 @@ from config import SYMBOL, TIMEFRAME, DRY_RUN
 from strategy.params import load_active, save_active, StrategyParams
 from backtest.engine import run_backtest
 from backtest.results import save_result, load_result, load_candidate
-from trading.executor import load_trade_log
+from trading.executor import load_trade_log, load_open_trade
 
 st.set_page_config(page_title="Trade Signal Dashboard", page_icon="📈", layout="wide")
 st.title("📈 Trade Signal Dashboard")
@@ -131,12 +131,60 @@ def render_demo():
     st.caption(f"DRY_RUN = {DRY_RUN}  ({'log อย่างเดียว ไม่ยิง order จริง' if DRY_RUN else 'ยิง order จริงบน testnet'})")
     params = load_active()
     st.caption(f"Active params: {params.to_dict()}")
+
+    # ไม้ที่กำลังถืออยู่ (ถ้ามี)
+    ot = load_open_trade()
+    if ot:
+        mfe = (ot["mfe_price"] - ot["entry"]) / ot["entry"] * 100
+        mae = (ot["mae_price"] - ot["entry"]) / ot["entry"] * 100
+        if ot["action"] == "SHORT":
+            mfe, mae = -mfe, -mae
+        st.info(f"📍 กำลังถือ **{ot['action']}** | entry {ot['entry']} | "
+                f"MFE {mfe:+.2f}% / MAE {mae:+.2f}% | SL {ot['sl']} TP {ot['tp']}")
+
     log = load_trade_log()
-    if not log:
-        st.info("ยังไม่มี trade — รัน `py -3.12 -m trading.live_demo`")
+    closed = [t for t in log if "pnl_pct" in t]   # ไม้ที่ปิดแล้ว (มี outcome)
+    if not closed:
+        st.info("ยังไม่มีไม้ที่ปิด — รอ trade แรกปิด (SL/TP โดน) แล้วสถิติจะขึ้นที่นี่")
         return
-    st.metric("จำนวน trade ทั้งหมด", len(log))
-    st.dataframe(pd.DataFrame(log[::-1]), width="stretch", hide_index=True)
+
+    df = pd.DataFrame(closed)
+    wins = df[df["won"]]
+    losses = df[~df["won"]]
+
+    # --- Summary stats ---
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Trades", len(df))
+    c1.metric("Win Rate", f"{len(wins)/len(df)*100:.1f}%")
+    c2.metric("Total PnL", f"{df['pnl_pct'].sum()*100:+.2f}%")
+    c2.metric("Avg PnL/ไม้", f"{df['pnl_pct'].mean()*100:+.2f}%")
+    c3.metric("Avg MFE (ไปบวกสุด)", f"{df['mfe_pct'].mean()*100:+.2f}%")
+    c3.metric("Avg MAE (ไปลบสุด)", f"{df['mae_pct'].mean()*100:.2f}%")
+    # แพ้แต่เคยบวกเกิน 0.5% = เกือบชน TP แล้วกลับ
+    near_miss = losses[losses["mfe_pct"] > 0.005] if not losses.empty else losses
+    c4.metric("แพ้แต่เคยบวก >0.5%", f"{len(near_miss)}/{len(losses)}")
+    win_tp = len(df[(df["won"]) & (df["exit_reason"] == "TP")])
+    c4.metric("ชนะโดนชน TP", f"{win_tp}/{len(wins)}")
+
+    # --- Insight อ่านง่าย ---
+    if not losses.empty and len(near_miss) / max(len(losses), 1) > 0.4:
+        st.warning("⚠️ ไม้ที่แพ้ส่วนใหญ่เคยกำไรก่อนกลับมาแพ้ → TP อาจตั้งไกลไป หรือควรมี trailing stop")
+    st.caption("MFE = ราคาวิ่งไปทางได้เปรียบสุดก่อนปิด · MAE = ไปทางเสียเปรียบสุด "
+               "(เทียบกับ SL/TP ดูว่าตั้งเหมาะไหม)")
+
+    # --- Trade table ---
+    show = df[["entry_time", "action", "entry", "exit", "exit_reason", "won",
+               "pnl_pct", "mfe_pct", "mae_pct", "duration_min"]].copy()
+    for col in ["pnl_pct", "mfe_pct", "mae_pct"]:
+        show[col] = (show[col] * 100).round(2)
+    show.columns = ["เวลา", "ทิศ", "Entry", "Exit", "ปิดเพราะ", "ชนะ",
+                    "PnL%", "MFE%", "MAE%", "นาที"]
+    st.dataframe(show[::-1], width="stretch", hide_index=True)
+
+    # --- Export CSV ---
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Export CSV (ทุก field)", csv,
+                       file_name="demo_trades.csv", mime="text/csv")
 
 
 # Dispatch Phase 2 pages (Live Signal = code ด้านล่าง)

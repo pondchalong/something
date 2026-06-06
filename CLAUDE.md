@@ -85,9 +85,10 @@ something/
 │   ├── results.py           # save/load result + candidate
 │   └── results/             # ผล backtest + candidate.json (gitignored, runtime)
 ├── trading/                 # Phase 2
-│   ├── executor.py          # execute_signal() บน Binance testnet (DRY_RUN guard)
-│   ├── live_demo.py         # live demo loop (signal → execute)
-│   └── trade_log.json       # log การเทรด (gitignored, runtime)
+│   ├── executor.py          # execute_signal() + trade lifecycle tracking (MFE/MAE, outcome)
+│   ├── live_demo.py         # live demo loop (state machine: ถือ→track, ปิด→record, ว่าง→execute)
+│   ├── open_trade.json      # ไม้ที่กำลังถือ + MFE/MAE running (gitignored, runtime)
+│   └── trade_log.json       # closed trades + outcome (gitignored, runtime/volume)
 └── sourcecode_indicators/   # Pine Script ต้นฉบับ (gitignored, ใช้ reference)
 ```
 
@@ -171,7 +172,7 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 **Backtest / Optimizer / Demo Trades** (Phase 2):
 - Backtest: ปุ่มรัน backtest (active params) → metrics + equity curve + trade list
 - Optimizer: แสดง candidate (best params, train vs test, overfit warning) + ปุ่ม **Apply** (manual approve → เขียน active_params.json)
-- Demo Trades: trade log + DRY_RUN status
+- Demo Trades: open position + summary stats (winrate, total/avg PnL, avg MFE/MAE, "แพ้แต่เคยบวก", ชนะโดน TP) + trade table + **Export CSV**
 
 ---
 
@@ -195,7 +196,8 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 - **Binance testnet connect:** ccxt 4.5+ ตัด `set_sandbox_mode()` สำหรับ futures → `get_testnet_exchange()` ใช้ `binanceusdm` + override `fapi*` endpoints เป็น `urls['test']` เอง + `fetchCurrencies=False` (ดู Known Issues). verified order จริงแล้ว
 - **Position sizing risk-based:** `size = (balance × RISK_PER_TRADE) / sl_distance`
 - 1 position ต่อครั้ง · **`DRY_RUN=True` (default) = log อย่างเดียว ไม่ยิง order** → ทดสอบ logic ก่อนเปิดจริง
-- `trading/live_demo.py` — loop: signal → execute (ใช้ active params)
+- `trading/live_demo.py` — state machine: ถือไม้→update MFE/MAE ทุก loop, position หาย→`record_closed_trade()`, ว่าง+signal→execute
+- **Trade stats (MFE/MAE):** เปิดไม้ → `open_trade.json` track high/low ระหว่างถือ; ปิด → บันทึก outcome ลง `trade_log.json`: win/loss, exit price/reason (SL/TP), pnl%, **MFE%** (ไปได้เปรียบสุด), **MAE%** (ไปเสียเปรียบสุด), duration. ดู + Export CSV ใน dashboard Demo Trades
 
 **Self-learning scope:** ตอนนี้ = optimize params ของ strategy ปัจจุบัน (ยังไม่ใช่ RL discover strategy ใหม่)
 
