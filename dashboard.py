@@ -10,13 +10,13 @@ from data.fetcher import (
 )
 from analysis.indicators import add_indicators
 from analysis.signals import generate_signal
-from config import SYMBOL, TIMEFRAME, DRY_RUN
+from config import SYMBOL, TIMEFRAME, DRY_RUN, DATA_DIR
 
 # Phase 2
 from strategy.params import load_active, save_active, StrategyParams
 from backtest.engine import run_backtest
 from backtest.results import save_result, load_result, load_candidate
-from trading.executor import load_trade_log, load_open_trade
+from trading.executor import load_trade_log, load_open_trade, TRADE_LOG
 
 st.set_page_config(page_title="Trade Signal Dashboard", page_icon="📈", layout="wide")
 st.title("📈 Trade Signal Dashboard")
@@ -131,6 +131,15 @@ def render_demo():
     st.caption(f"DRY_RUN = {DRY_RUN}  ({'log อย่างเดียว ไม่ยิง order จริง' if DRY_RUN else 'ยิง order จริงบน testnet'})")
     params = load_active()
     st.caption(f"Active params: {params.to_dict()}")
+
+    # Storage indicator — เช็คว่า log เขียนที่ไหน (volume vs ephemeral)
+    import os as _os
+    _all = load_trade_log()
+    if DATA_DIR:
+        st.success(f"📁 Storage: `{TRADE_LOG}` · ✅ Railway Volume (persist) · "
+                   f"{len(_all)} records · ไฟล์{'มีจริง' if _os.path.exists(TRADE_LOG) else 'ยังไม่ถูกสร้าง'}")
+    else:
+        st.warning(f"📁 Storage: `{TRADE_LOG}` · ⚠️ ephemeral (DATA_DIR ไม่ถูกตั้ง — หายเมื่อ redeploy)")
 
     # ไม้ที่กำลังถืออยู่ (ถ้ามี)
     ot = load_open_trade()
