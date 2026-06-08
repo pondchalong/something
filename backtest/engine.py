@@ -49,8 +49,14 @@ def simulate(df: pd.DataFrame, params=DEFAULT_PARAMS, fee: float = FEE,
         row = df.iloc[i]
         ts = df.index[i]
 
-        # 1) มี position → เช็ค exit ด้วย high/low ของ candle นี้
+        # 1) มี position → อัปเดต MFE/MAE แล้วเช็ค exit ด้วย high/low ของ candle นี้
         if pos is not None:
+            if pos["side"] == "LONG":
+                pos["mfe"] = max(pos["mfe"], row["high"] - pos["entry"])
+                pos["mae"] = max(pos["mae"], pos["entry"] - row["low"])
+            else:
+                pos["mfe"] = max(pos["mfe"], pos["entry"] - row["low"])
+                pos["mae"] = max(pos["mae"], row["high"] - pos["entry"])
             hit = _check_exit(pos, row["high"], row["low"])
             if hit:
                 exit_price, result = hit
@@ -58,11 +64,15 @@ def simulate(df: pd.DataFrame, params=DEFAULT_PARAMS, fee: float = FEE,
                     pnl = (exit_price - pos["entry"]) / pos["entry"] - 2 * fee
                 else:
                     pnl = (pos["entry"] - exit_price) / pos["entry"] - 2 * fee
+                tp_dist = abs(pos["tp"] - pos["entry"])
+                sl_dist = abs(pos["sl"] - pos["entry"])
                 trades.append({
                     "entry_time": str(pos["entry_time"]), "exit_time": str(ts),
                     "side": pos["side"], "entry": round(pos["entry"], 2),
                     "exit": round(exit_price, 2), "sl": round(pos["sl"], 2),
                     "tp": round(pos["tp"], 2), "pnl_pct": round(pnl, 4), "result": result,
+                    "mfe_pct_of_tp": round(pos["mfe"] / tp_dist, 3) if tp_dist > 0 else 0.0,
+                    "mae_pct_of_sl": round(pos["mae"] / sl_dist, 3) if sl_dist > 0 else 0.0,
                 })
                 pos = None
 
@@ -73,6 +83,7 @@ def simulate(df: pd.DataFrame, params=DEFAULT_PARAMS, fee: float = FEE,
                 pos = {
                     "side": sig["signal"], "entry": sig["price"],
                     "sl": sig["sl"], "tp": sig["tp"], "entry_time": ts,
+                    "mfe": 0.0, "mae": 0.0,
                 }
 
     return compute_metrics(trades, params.to_dict())
