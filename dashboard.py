@@ -59,6 +59,18 @@ def _show_metrics(m: dict):
     c4.metric("Avg Win", f"{m.get('avg_win', 0)*100:+.2f}%")
     c4.metric("Avg Loss", f"{m.get('avg_loss', 0)*100:+.2f}%")
 
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("Expectancy", f"{m.get('expectancy', 0)*100:+.2f}%")
+    d2.metric("Calmar Ratio", f"{m.get('calmar_ratio', 0):.2f}")
+    d3.metric("Max Consec. Losses", m.get("max_consecutive_losses", 0))
+    d4.metric("Near-TP Miss", f"{m.get('near_tp_miss_pct', 0):.1f}%")
+
+    e1, e2, e3, e4 = st.columns(4)
+    e1.metric("Avg MFE (ไม้แพ้)", f"{m.get('avg_mfe_loss', 0)*100:.1f}% of TP")
+    e2.metric("Avg MAE (ไม้ชนะ)", f"{m.get('avg_mae_win', 0)*100:.1f}% of SL")
+    e3.metric("Near-SL Scare", f"{m.get('near_sl_scare_pct', 0):.1f}%")
+    st.caption("Near-TP Miss = % ไม้แพ้ที่ราคาไปถึง >70% TP ก่อนโดน SL · Near-SL Scare = % ไม้ชนะที่ราคาเกือบโดน SL")
+
 
 def render_backtest():
     st.header("📊 Backtest")
