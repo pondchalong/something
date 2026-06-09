@@ -196,6 +196,7 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 - **Binance testnet connect:** ccxt 4.5+ ตัด `set_sandbox_mode()` สำหรับ futures → `get_testnet_exchange()` ใช้ `binanceusdm` + override `fapi*` endpoints เป็น `urls['test']` เอง + `fetchCurrencies=False` (ดู Known Issues). verified order จริงแล้ว
 - **Position sizing risk-based:** `size = (balance × RISK_PER_TRADE) / sl_distance`
 - 1 position ต่อครั้ง · **`DRY_RUN=True` (default) = log อย่างเดียว ไม่ยิง order** → ทดสอบ logic ก่อนเปิดจริง
+- **Reverse mode (`params.reverse`, default False):** ถือไม้ + signal กลับข้าง → ปิด (`close_position()`) + เปิดตรงข้ามทันที (exit_reason="reverse"). SL/TP มาก่อน reverse (priority). backtest `simulate()` + executor + live_demo ใช้ logic เดียวกัน. *หมายเหตุ: backtest พบว่า reverse มักแย่กว่าบน strategy ปัจจุบัน (signal กลับข้างไม่แม่น) — เปิดเมื่อ optimize/ยืนยันแล้วเท่านั้น*
 - `trading/live_demo.py` — state machine: ถือไม้→update MFE/MAE ทุก loop, position หาย→`record_closed_trade()`, ว่าง+signal→execute
 - **Trade stats (MFE/MAE):** เปิดไม้ → `open_trade.json` track high/low ระหว่างถือ; ปิด → บันทึก outcome ลง `trade_log.json`: win/loss, exit price/reason (SL/TP), pnl%, **MFE%** (ไปได้เปรียบสุด), **MAE%** (ไปเสียเปรียบสุด), duration. ดู + Export CSV ใน dashboard Demo Trades
 

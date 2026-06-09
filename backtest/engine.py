@@ -20,18 +20,44 @@ WARMUP = 250      # ข้าม candle แรกที่ indicator ยัง N
 
 
 def _check_exit(pos: dict, high: float, low: float):
-    """คืน (exit_price, result) ถ้าโดน SL/TP ใน candle นี้ — ถ้าโดนทั้งคู่ สมมติ SL ก่อน (conservative)"""
+    """คืน (exit_price, reason) ถ้าโดน SL/TP ใน candle นี้ — ถ้าโดนทั้งคู่ สมมติ SL ก่อน (conservative)"""
     if pos["side"] == "LONG":
         if low <= pos["sl"]:
-            return pos["sl"], "loss"
+            return pos["sl"], "SL"
         if high >= pos["tp"]:
-            return pos["tp"], "win"
+            return pos["tp"], "TP"
     else:  # SHORT
         if high >= pos["sl"]:
-            return pos["sl"], "loss"
+            return pos["sl"], "SL"
         if low <= pos["tp"]:
-            return pos["tp"], "win"
+            return pos["tp"], "TP"
     return None
+
+
+def _open_pos(sig: dict, ts) -> dict:
+    return {
+        "side": sig["signal"], "entry": sig["price"],
+        "sl": sig["sl"], "tp": sig["tp"], "entry_time": ts,
+        "mfe": 0.0, "mae": 0.0,
+    }
+
+
+def _record(trades: list, pos: dict, exit_price: float, exit_reason: str, ts, fee: float):
+    if pos["side"] == "LONG":
+        pnl = (exit_price - pos["entry"]) / pos["entry"] - 2 * fee
+    else:
+        pnl = (pos["entry"] - exit_price) / pos["entry"] - 2 * fee
+    tp_dist = abs(pos["tp"] - pos["entry"])
+    sl_dist = abs(pos["sl"] - pos["entry"])
+    trades.append({
+        "entry_time": str(pos["entry_time"]), "exit_time": str(ts),
+        "side": pos["side"], "entry": round(pos["entry"], 2),
+        "exit": round(exit_price, 2), "sl": round(pos["sl"], 2),
+        "tp": round(pos["tp"], 2), "pnl_pct": round(pnl, 4),
+        "result": "win" if pnl > 0 else "loss", "exit_reason": exit_reason,
+        "mfe_pct_of_tp": round(pos["mfe"] / tp_dist, 3) if tp_dist > 0 else 0.0,
+        "mae_pct_of_sl": round(pos["mae"] / sl_dist, 3) if sl_dist > 0 else 0.0,
+    })
 
 
 def simulate(df: pd.DataFrame, params=DEFAULT_PARAMS, fee: float = FEE,
@@ -48,8 +74,9 @@ def simulate(df: pd.DataFrame, params=DEFAULT_PARAMS, fee: float = FEE,
     for i in range(start, end):
         row = df.iloc[i]
         ts = df.index[i]
+        sig = generate_signal(df.iloc[:i + 1], params)   # เรียกครั้งเดียว/candle
 
-        # 1) มี position → อัปเดต MFE/MAE แล้วเช็ค exit ด้วย high/low ของ candle นี้
+        # 1) มี position → อัปเดต MFE/MAE แล้วเช็ค exit (SL/TP ก่อน, แล้วค่อย reverse)
         if pos is not None:
             if pos["side"] == "LONG":
                 pos["mfe"] = max(pos["mfe"], row["high"] - pos["entry"])
@@ -57,34 +84,21 @@ def simulate(df: pd.DataFrame, params=DEFAULT_PARAMS, fee: float = FEE,
             else:
                 pos["mfe"] = max(pos["mfe"], pos["entry"] - row["low"])
                 pos["mae"] = max(pos["mae"], row["high"] - pos["entry"])
+
             hit = _check_exit(pos, row["high"], row["low"])
             if hit:
-                exit_price, result = hit
-                if pos["side"] == "LONG":
-                    pnl = (exit_price - pos["entry"]) / pos["entry"] - 2 * fee
-                else:
-                    pnl = (pos["entry"] - exit_price) / pos["entry"] - 2 * fee
-                tp_dist = abs(pos["tp"] - pos["entry"])
-                sl_dist = abs(pos["sl"] - pos["entry"])
-                trades.append({
-                    "entry_time": str(pos["entry_time"]), "exit_time": str(ts),
-                    "side": pos["side"], "entry": round(pos["entry"], 2),
-                    "exit": round(exit_price, 2), "sl": round(pos["sl"], 2),
-                    "tp": round(pos["tp"], 2), "pnl_pct": round(pnl, 4), "result": result,
-                    "mfe_pct_of_tp": round(pos["mfe"] / tp_dist, 3) if tp_dist > 0 else 0.0,
-                    "mae_pct_of_sl": round(pos["mae"] / sl_dist, 3) if sl_dist > 0 else 0.0,
-                })
+                # SL/TP มาก่อน (priority)
+                exit_price, reason = hit
+                _record(trades, pos, exit_price, reason, ts, fee)
                 pos = None
+            elif params.reverse and sig and sig["signal"] != pos["side"]:
+                # ยังไม่โดน SL/TP + signal กลับข้าง → ปิดที่ close แล้วเปิดใหม่ทันที
+                _record(trades, pos, row["close"], "reverse", ts, fee)
+                pos = _open_pos(sig, ts)
 
-        # 2) ไม่มี position → ดู signal ที่ candle นี้ (ใช้ data ถึง i เท่านั้น)
-        if pos is None:
-            sig = generate_signal(df.iloc[:i + 1], params)
-            if sig:
-                pos = {
-                    "side": sig["signal"], "entry": sig["price"],
-                    "sl": sig["sl"], "tp": sig["tp"], "entry_time": ts,
-                    "mfe": 0.0, "mae": 0.0,
-                }
+        # 2) ไม่มี position + มี signal → เปิดใหม่
+        if pos is None and sig:
+            pos = _open_pos(sig, ts)
 
     return compute_metrics(trades, params.to_dict())
 

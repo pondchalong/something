@@ -14,7 +14,7 @@ from data.fetcher import fetch_ohlcv, fetch_htf_ohlcv, get_testnet_exchange
 from analysis.indicators import add_indicators
 from analysis.signals import generate_signal
 from trading.executor import (
-    execute_signal, get_open_position,
+    execute_signal, get_open_position, close_position,
     load_open_trade, save_open_trade, clear_open_trade,
     new_open_trade, update_excursion, record_closed_trade,
 )
@@ -72,8 +72,25 @@ def run():
                 # ถือไม้อยู่ → update MFE/MAE
                 update_excursion(open_trade, latest["high"], latest["low"])
                 save_open_trade(open_trade)
-                logger.info(f"ถือ {open_trade['action']} | "
-                            f"MFE {open_trade['mfe_price']:.2f} MAE {open_trade['mae_price']:.2f}")
+
+                # reverse: signal กลับข้าง + เปิด params.reverse → ปิดเดิม + เปิดตรงข้าม
+                if (params.reverse and sig and sig["signal"] != open_trade["action"]
+                        and current != last_candle):
+                    logger.info(f"REVERSE: ปิด {open_trade['action']} → เปิด {sig['signal']}")
+                    exit_price = close_position(ex, SYMBOL)
+                    record_closed_trade(ex, open_trade, exit_price=exit_price, exit_reason="reverse")
+                    clear_open_trade()
+                    result = execute_signal(sig)
+                    if result.get("status") == "executed":
+                        save_open_trade(new_open_trade(sig, result.get("size")))
+                        send_alert(sig)
+                        logger.info("REVERSE สำเร็จ — เปิดไม้ตรงข้าม")
+                    else:
+                        logger.warning(f"REVERSE: เปิดไม้ใหม่ไม่สำเร็จ: {result.get('status')}")
+                    last_candle = current
+                else:
+                    logger.info(f"ถือ {open_trade['action']} | "
+                                f"MFE {open_trade['mfe_price']:.2f} MAE {open_trade['mae_price']:.2f}")
 
             elif open_trade and not has_pos:
                 # ไม้ปิดแล้ว (SL/TP โดน) → บันทึก outcome

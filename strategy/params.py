@@ -33,6 +33,9 @@ class StrategyParams:
     # Data
     timeframe: str = "15m"
 
+    # Position management
+    reverse: bool = False    # True = ถือไม้ + signal ตรงข้าม → ปิด + กลับข้างทันที
+
     def to_dict(self) -> dict:
         return asdict(self)
 

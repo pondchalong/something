@@ -202,19 +202,23 @@ def update_excursion(t: dict, high: float, low: float):
         t["mae_price"] = max(t["mae_price"], high)
 
 
-def record_closed_trade(ex, t: dict, symbol=SYMBOL) -> dict:
-    """ไม้ปิดแล้ว (position หาย) → คำนวณ outcome + MFE/MAE% → บันทึก trade_log"""
+def record_closed_trade(ex, t: dict, symbol=SYMBOL, exit_price=None, exit_reason=None) -> dict:
+    """
+    ไม้ปิดแล้ว → คำนวณ outcome + MFE/MAE% → บันทึก trade_log
+    exit_price/exit_reason: ถ้าให้มา (เช่นตอน reverse) ใช้เลย; ไม่งั้นดึงจาก fills + เดา SL/TP
+    """
     entry = t["entry"]
-    exit_price = entry
-    try:
-        fills = ex.fetch_my_trades(symbol, limit=20)
-        exit_side = "sell" if t["action"] == "LONG" else "buy"
-        for f in reversed(fills):
-            if f.get("side") == exit_side:
-                exit_price = float(f["price"])
-                break
-    except Exception as e:
-        logger.warning(f"ดึง exit price ไม่ได้ ใช้ entry แทน: {str(e)[:60]}")
+    if exit_price is None:
+        exit_price = entry
+        try:
+            fills = ex.fetch_my_trades(symbol, limit=20)
+            exit_side = "sell" if t["action"] == "LONG" else "buy"
+            for f in reversed(fills):
+                if f.get("side") == exit_side:
+                    exit_price = float(f["price"])
+                    break
+        except Exception as e:
+            logger.warning(f"ดึง exit price ไม่ได้ ใช้ entry แทน: {str(e)[:60]}")
 
     if t["action"] == "LONG":
         pnl_pct = (exit_price - entry) / entry
@@ -226,7 +230,9 @@ def record_closed_trade(ex, t: dict, symbol=SYMBOL) -> dict:
         mae_pct = (entry - t["mae_price"]) / entry
     pnl_pct -= 2 * FEE
 
-    reason = "SL" if abs(exit_price - t["sl"]) < abs(exit_price - t["tp"]) else "TP"
+    if exit_reason is None:
+        exit_reason = "SL" if abs(exit_price - t["sl"]) < abs(exit_price - t["tp"]) else "TP"
+    reason = exit_reason
 
     try:
         dur = (datetime.now() - datetime.fromisoformat(t["entry_time"])).total_seconds() / 60
@@ -250,3 +256,26 @@ def record_closed_trade(ex, t: dict, symbol=SYMBOL) -> dict:
                 f"pnl={pnl_pct*100:+.2f}% exit~{reason} "
                 f"MFE={mfe_pct*100:+.2f}% MAE={mae_pct*100:+.2f}%")
     return closed
+
+
+def close_position(ex, symbol=SYMBOL):
+    """ปิด position ปัจจุบัน (market reduce-only) + cancel SL/TP orders ที่ค้าง → คืน exit price"""
+    pos = get_open_position(ex, symbol)
+    if not pos:
+        return None
+    c = abs(float(pos["contracts"]))
+    side = "sell" if pos["side"] == "long" else "buy"
+    try:
+        ex.cancel_all_orders(symbol)
+    except Exception as e:
+        logger.warning(f"cancel orders ไม่ได้: {str(e)[:50]}")
+    _retry(lambda: ex.create_order(symbol, "market", side, c, None, {"reduceOnly": True}))
+    # exit price จาก fill ล่าสุด
+    try:
+        fills = ex.fetch_my_trades(symbol, limit=5)
+        for f in reversed(fills):
+            if f.get("side") == side:
+                return float(f["price"])
+    except Exception:
+        pass
+    return None
