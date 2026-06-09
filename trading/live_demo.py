@@ -19,7 +19,7 @@ from trading.executor import (
     new_open_trade, update_excursion, record_closed_trade,
 )
 from strategy.params import load_active
-from alerts.telegram import send_alert
+from alerts.telegram import send_alert, send_closed_alert, send_skip_alert
 from utils.logger import logger
 from config import SYMBOL, DRY_RUN
 
@@ -78,8 +78,9 @@ def run():
                         and current != last_candle):
                     logger.info(f"REVERSE: ปิด {open_trade['action']} → เปิด {sig['signal']}")
                     exit_price = close_position(ex, SYMBOL)
-                    record_closed_trade(ex, open_trade, exit_price=exit_price, exit_reason="reverse")
+                    closed = record_closed_trade(ex, open_trade, exit_price=exit_price, exit_reason="reverse")
                     clear_open_trade()
+                    send_closed_alert(closed)
                     result = execute_signal(sig)
                     if result.get("status") == "executed":
                         save_open_trade(new_open_trade(sig, result.get("size")))
@@ -106,27 +107,27 @@ def run():
                     else:
                         logger.warning(f"PYRAMID add ไม่สำเร็จ: {info.get('status')} {info.get('reason','')}")
                     last_candle = current
+                elif sig and current != last_candle:
+                    # มี signal แต่ถือไม้อยู่ (ไม่ reverse/pyramid) → ข้าม + แจ้งให้รู้
+                    send_skip_alert(sig, open_trade["action"])
+                    logger.info(f"signal {sig['signal']} ข้าม (ถือ {open_trade['action']} อยู่)")
+                    last_candle = current
                 else:
                     logger.info(f"ถือ {open_trade['action']} | "
                                 f"MFE {open_trade['mfe_price']:.2f} MAE {open_trade['mae_price']:.2f}")
 
             elif open_trade and not has_pos:
-                # ไม้ปิดแล้ว (SL/TP โดน) → บันทึก outcome
-                record_closed_trade(ex, open_trade)
+                # ไม้ปิดแล้ว (SL/TP โดน) → บันทึก outcome + แจ้งผล
+                closed = record_closed_trade(ex, open_trade)
                 clear_open_trade()
+                send_closed_alert(closed)
 
             elif has_pos and not open_trade:
                 # orphan position — มี position แต่ไม่มี state (เปิดก่อน tracking /
                 # SL-TP ตั้งไม่ได้ / state หาย) → ปิดทิ้ง กัน deadlock + position เปลือย
                 logger.warning("พบ orphan position (ไม่มี open_trade state) → ปิดทิ้ง")
-                p = get_open_position(ex, SYMBOL)
-                try:
-                    c = abs(float(p["contracts"]))
-                    cs = "sell" if p["side"] == "long" else "buy"
-                    ex.create_order(SYMBOL, "market", cs, c, None, {"reduceOnly": True})
-                    logger.info("ปิด orphan สำเร็จ — รอบหน้าเปิดไม้ใหม่ได้")
-                except Exception as e:
-                    logger.error(f"ปิด orphan ไม่ได้: {str(e)[:60]}")
+                close_position(ex, SYMBOL)   # cancel conditional + market close
+                logger.info("ปิด orphan สำเร็จ — รอบหน้าเปิดไม้ใหม่ได้")
 
             elif not has_pos and sig and current != last_candle:
                 # ว่าง + มี signal → เปิดใหม่

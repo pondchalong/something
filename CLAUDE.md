@@ -151,7 +151,10 @@ EMA20/50, RSI(14), MACD(12,26,9), Bollinger Bands(20,2), ATR(14)
 
 ## Alerts (alerts/telegram.py)
 
-- ส่ง Markdown message: signal, entry, SL, TP, R:R, winrate, risk, RSI, ATR
+- `send_alert(signal)` — เปิดไม้/มีสัญญาณ: signal, entry, SL, TP, R:R, winrate, risk, confluence, RSI, ATR
+- `send_closed_alert(closed)` — ไม้ปิด (SL/TP/reverse): win/loss, exit price/reason, PnL%, MFE%/MAE%, duration
+- `send_skip_alert(signal, holding)` — มี signal แต่ถือไม้อยู่ → ข้าม (รู้ว่าพลาดจังหวะไหน)
+- live_demo เรียกครบ: เปิด → `send_alert` · ปิด → `send_closed_alert` · signal ระหว่างถือ → `send_skip_alert`
 - ต้องตั้ง `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`
 - **Gotcha:** ต้องกด `/start` ใน Telegram bot ก่อน ไม่งั้นส่งไม่ได้ ("chat not found")
 
