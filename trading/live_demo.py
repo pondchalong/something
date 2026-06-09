@@ -14,7 +14,7 @@ from data.fetcher import fetch_ohlcv, fetch_htf_ohlcv, get_testnet_exchange
 from analysis.indicators import add_indicators
 from analysis.signals import generate_signal
 from trading.executor import (
-    execute_signal, get_open_position, close_position,
+    execute_signal, get_open_position, close_position, add_to_position,
     load_open_trade, save_open_trade, clear_open_trade,
     new_open_trade, update_excursion, record_closed_trade,
 )
@@ -87,6 +87,24 @@ def run():
                         logger.info("REVERSE สำเร็จ — เปิดไม้ตรงข้าม")
                     else:
                         logger.warning(f"REVERSE: เปิดไม้ใหม่ไม่สำเร็จ: {result.get('status')}")
+                    last_candle = current
+                elif (params.max_pyramid > 1 and sig and sig["signal"] == open_trade["action"]
+                      and open_trade.get("n_levels", 1) < params.max_pyramid
+                      and current != last_candle):
+                    # pyramid: signal เดิมทาง + ยังไม่ถึง max → เพิ่มไม้ (เฉลี่ย entry)
+                    logger.info(f"PYRAMID: +{sig['signal']} level {open_trade.get('n_levels',1)+1}")
+                    info = add_to_position(ex, sig, params.max_pyramid)
+                    if info.get("status") == "added":
+                        open_trade["n_levels"] = open_trade.get("n_levels", 1) + 1
+                        open_trade["entry"] = info["avg_entry"]
+                        open_trade["sl"] = info["sl"]
+                        open_trade["tp"] = info["tp"]
+                        open_trade["size"] = info["size"]
+                        save_open_trade(open_trade)
+                        send_alert(sig)
+                        logger.info(f"PYRAMID สำเร็จ — level {open_trade['n_levels']}")
+                    else:
+                        logger.warning(f"PYRAMID add ไม่สำเร็จ: {info.get('status')} {info.get('reason','')}")
                     last_candle = current
                 else:
                     logger.info(f"ถือ {open_trade['action']} | "

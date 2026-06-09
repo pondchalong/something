@@ -61,6 +61,19 @@ def _append_log(entry: dict) -> None:
         json.dump(log, f, indent=2)
 
 
+def _cancel_all(ex, symbol=SYMBOL):
+    """
+    cancel ทั้ง regular + conditional orders
+    สำคัญ: Binance futures SL/TP เป็น conditional order — cancel_all_orders ปกติ
+    ไม่ลบ ต้องเรียกซ้ำด้วย params={'stop': True} (ไม่งั้น SL/TP ค้างสะสม)
+    """
+    for params in ({}, {"stop": True}):
+        try:
+            ex.cancel_all_orders(symbol, params=params)
+        except Exception as e:
+            logger.warning(f"cancel orders {params or 'regular'}: {str(e)[:40]}")
+
+
 def get_open_position(ex, symbol=SYMBOL):
     """คืน position ที่เปิดอยู่ (ถ้ามี) — None ถ้าไม่มี"""
     try:
@@ -185,7 +198,7 @@ def new_open_trade(signal: dict, size=None) -> dict:
     """สร้าง state ของไม้ที่เพิ่งเปิด (MFE/MAE เริ่มที่ราคา entry)"""
     return {
         "action": signal["signal"], "entry": signal["price"],
-        "sl": signal["sl"], "tp": signal["tp"], "size": size,
+        "sl": signal["sl"], "tp": signal["tp"], "size": size, "n_levels": 1,
         "entry_time": datetime.now().isoformat(timespec="seconds"),
         "mfe_price": signal["price"], "mae_price": signal["price"],
         "confluence": signal.get("confluence"), "winrate_est": signal.get("winrate"),
@@ -265,10 +278,7 @@ def close_position(ex, symbol=SYMBOL):
         return None
     c = abs(float(pos["contracts"]))
     side = "sell" if pos["side"] == "long" else "buy"
-    try:
-        ex.cancel_all_orders(symbol)
-    except Exception as e:
-        logger.warning(f"cancel orders ไม่ได้: {str(e)[:50]}")
+    _cancel_all(ex, symbol)
     _retry(lambda: ex.create_order(symbol, "market", side, c, None, {"reduceOnly": True}))
     # exit price จาก fill ล่าสุด
     try:
@@ -279,3 +289,49 @@ def close_position(ex, symbol=SYMBOL):
     except Exception:
         pass
     return None
+
+
+def add_to_position(ex, signal: dict, max_pyramid: int, symbol=SYMBOL) -> dict:
+    """
+    Pyramid — เพิ่มไม้ทางเดียวกัน: market add (risk แบ่ง = RISK_PER_TRADE/max_pyramid)
+    → recompute SL/TP จาก avg entry (position entryPrice หลัง add) ด้วย total size
+    """
+    side = "buy" if signal["signal"] == "LONG" else "sell"
+    sl_dist = abs(signal["price"] - signal["sl"])
+    tp_dist = abs(signal["tp"] - signal["price"])
+    if sl_dist <= 0:
+        return {"status": "skipped", "reason": "invalid_sl"}
+
+    balance = _retry(lambda: ex.fetch_balance()["USDT"]["free"])
+    add_size = (balance * (RISK_PER_TRADE / max_pyramid)) / sl_dist
+    add_size = float(ex.amount_to_precision(symbol, add_size))
+    if add_size <= 0:
+        return {"status": "skipped", "reason": "size_too_small"}
+
+    _retry(lambda: ex.create_order(symbol, "market", side, add_size))
+
+    pos = get_open_position(ex, symbol)
+    if not pos:
+        return {"status": "failed", "reason": "no_position_after_add"}
+    avg = float(pos["entryPrice"])
+    total_size = abs(float(pos["contracts"]))
+
+    if signal["signal"] == "LONG":
+        new_sl, new_tp = avg - sl_dist, avg + tp_dist
+    else:
+        new_sl, new_tp = avg + sl_dist, avg - tp_dist
+
+    opp = "sell" if side == "buy" else "buy"
+    try:
+        _cancel_all(ex, symbol)
+        _retry(lambda: ex.create_order(symbol, "STOP_MARKET", opp, total_size, None,
+                                       {"stopPrice": round(new_sl, 2), "reduceOnly": True}))
+        _retry(lambda: ex.create_order(symbol, "TAKE_PROFIT_MARKET", opp, total_size, None,
+                                       {"stopPrice": round(new_tp, 2), "reduceOnly": True}))
+    except Exception as e:
+        logger.error(f"pyramid: ตั้ง SL/TP ใหม่ไม่ได้ → ปิด position กันเปลือย: {str(e)[:60]}")
+        close_position(ex, symbol)
+        return {"status": "failed", "reason": "sltp_failed_closed"}
+
+    logger.info(f"[PYRAMID] +{signal['signal']} avg={avg:.2f} size={total_size} SL={new_sl:.2f} TP={new_tp:.2f}")
+    return {"status": "added", "avg_entry": avg, "size": total_size, "sl": new_sl, "tp": new_tp}

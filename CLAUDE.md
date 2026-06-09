@@ -196,7 +196,11 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 - **Binance testnet connect:** ccxt 4.5+ ตัด `set_sandbox_mode()` สำหรับ futures → `get_testnet_exchange()` ใช้ `binanceusdm` + override `fapi*` endpoints เป็น `urls['test']` เอง + `fetchCurrencies=False` (ดู Known Issues). verified order จริงแล้ว
 - **Position sizing risk-based:** `size = (balance × RISK_PER_TRADE) / sl_distance`
 - 1 position ต่อครั้ง · **`DRY_RUN=True` (default) = log อย่างเดียว ไม่ยิง order** → ทดสอบ logic ก่อนเปิดจริง
-- **Reverse mode (`params.reverse`, default False):** ถือไม้ + signal กลับข้าง → ปิด (`close_position()`) + เปิดตรงข้ามทันที (exit_reason="reverse"). SL/TP มาก่อน reverse (priority). backtest `simulate()` + executor + live_demo ใช้ logic เดียวกัน. *หมายเหตุ: backtest พบว่า reverse มักแย่กว่าบน strategy ปัจจุบัน (signal กลับข้างไม่แม่น) — เปิดเมื่อ optimize/ยืนยันแล้วเท่านั้น*
+- **Position management (3 โหมด, backtest + executor + live_demo ใช้ logic เดียวกัน):**
+  - **Reverse (`params.reverse`, default False):** ถือไม้ + signal กลับข้าง → ปิด (`close_position()`) + เปิดตรงข้าม (exit_reason="reverse")
+  - **Pyramid (`params.max_pyramid`, default 1):** ถือไม้ + signal เดิมทาง + level < max → เพิ่มไม้ (`add_to_position()`): เฉลี่ย entry, recompute SL/TP จาก avg, risk แบ่ง (`RISK_PER_TRADE/max_pyramid` ต่อ level)
+  - **Priority:** SL/TP > reverse > pyramid
+  - *หมายเหตุ: backtest พบว่าทั้ง reverse + pyramid แย่กว่าบน strategy ปัจจุบัน (reverse -4%, pyramid -9% DD 12%) — เปิดเมื่อ optimize ยืนยันเท่านั้น*
 - `trading/live_demo.py` — state machine: ถือไม้→update MFE/MAE ทุก loop, position หาย→`record_closed_trade()`, ว่าง+signal→execute
 - **Trade stats (MFE/MAE):** เปิดไม้ → `open_trade.json` track high/low ระหว่างถือ; ปิด → บันทึก outcome ลง `trade_log.json`: win/loss, exit price/reason (SL/TP), pnl%, **MFE%** (ไปได้เปรียบสุด), **MAE%** (ไปเสียเปรียบสุด), duration. ดู + Export CSV ใน dashboard Demo Trades
 
@@ -272,6 +276,7 @@ py -3.12 -m trading.live_demo
 - **Telegram:** ต้องกด `/start` กับ bot ก่อน ส่งครั้งแรกถึงจะได้
 - **ccxt Binance futures testnet:** ccxt 4.5+ `set_sandbox_mode(True)` บน binance/binanceusdm futures → raise `NotSupported` (deprecated). แก้ใน `get_testnet_exchange()`: ใช้ `binanceusdm` + copy `urls['test']` fapi endpoints → `urls['api']` + `options.fetchCurrencies=False` (เลี่ยง sapi ที่ไม่มี testnet URL). Bybit testnet ยัง support set_sandbox_mode ปกติ (เก็บเป็น fallback)
 - **Binance testnet ไม่เสถียร:** 502 Bad Gateway / -1007 timeout บ่อย (testnet best-effort). `executor._retry()` ลองซ้ำ transient errors 3 ครั้ง + verify position หลัง entry (กัน position เปลือยตอน "execution unknown") + ปิด position ถ้าตั้ง SL/TP ไม่ได้
+- **Binance futures conditional orders (SL/TP):** STOP_MARKET/TAKE_PROFIT_MARKET **ไม่อยู่ใน `fetch_open_orders()` ปกติ** — ต้อง `params={'stop': True}`. และ `cancel_all_orders()` ปกติ **ไม่ลบ** conditional ด้วย → ต้อง cancel ซ้ำด้วย stop param (ดู `executor._cancel_all()`) ไม่งั้น SL/TP ค้างสะสม. *เคย diagnose ผิดว่า position "เปลือย" เพราะ query นี้*
 - **Railway auto-deploy:** ถ้า deploy ค้าง commit เก่า → เช็ค Auto Deploy ON + branch ที่ผูก, trigger redeploy manual
 
 ---

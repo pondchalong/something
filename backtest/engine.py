@@ -34,29 +34,56 @@ def _check_exit(pos: dict, high: float, low: float):
     return None
 
 
+def _recompute_sltp(pos: dict):
+    """คำนวณ SL/TP ใหม่จาก avg entry (ใช้ระยะ sl_dist/tp_dist ของ signal ล่าสุด)"""
+    if pos["side"] == "LONG":
+        pos["sl"] = pos["avg_entry"] - pos["sl_dist"]
+        pos["tp"] = pos["avg_entry"] + pos["tp_dist"]
+    else:
+        pos["sl"] = pos["avg_entry"] + pos["sl_dist"]
+        pos["tp"] = pos["avg_entry"] - pos["tp_dist"]
+
+
 def _open_pos(sig: dict, ts) -> dict:
     return {
-        "side": sig["signal"], "entry": sig["price"],
-        "sl": sig["sl"], "tp": sig["tp"], "entry_time": ts,
-        "mfe": 0.0, "mae": 0.0,
+        "side": sig["signal"], "entries": [sig["price"]], "avg_entry": sig["price"],
+        "n_levels": 1,
+        "sl": sig["sl"], "tp": sig["tp"],
+        "sl_dist": abs(sig["price"] - sig["sl"]), "tp_dist": abs(sig["tp"] - sig["price"]),
+        "entry_time": ts, "mfe_price": sig["price"], "mae_price": sig["price"],
     }
 
 
+def _add_pyramid(pos: dict, sig: dict):
+    """เพิ่มไม้ทางเดียวกัน → เฉลี่ย entry + recompute SL/TP จาก avg (size เท่ากันต่อ level)"""
+    pos["entries"].append(sig["price"])
+    pos["avg_entry"] = sum(pos["entries"]) / len(pos["entries"])
+    pos["n_levels"] += 1
+    pos["sl_dist"] = abs(sig["price"] - sig["sl"])
+    pos["tp_dist"] = abs(sig["tp"] - sig["price"])
+    _recompute_sltp(pos)
+
+
 def _record(trades: list, pos: dict, exit_price: float, exit_reason: str, ts, fee: float):
+    avg = pos["avg_entry"]
+    n = pos["n_levels"]
     if pos["side"] == "LONG":
-        pnl = (exit_price - pos["entry"]) / pos["entry"] - 2 * fee
+        pnl = (exit_price - avg) / avg
+        mfe_dist = pos["mfe_price"] - avg
+        mae_dist = avg - pos["mae_price"]
     else:
-        pnl = (pos["entry"] - exit_price) / pos["entry"] - 2 * fee
-    tp_dist = abs(pos["tp"] - pos["entry"])
-    sl_dist = abs(pos["sl"] - pos["entry"])
+        pnl = (avg - exit_price) / avg
+        mfe_dist = avg - pos["mfe_price"]
+        mae_dist = pos["mae_price"] - avg
+    pnl -= fee * (n + 1)   # fee ต่อ entry (n ไม้) + exit (1)
     trades.append({
         "entry_time": str(pos["entry_time"]), "exit_time": str(ts),
-        "side": pos["side"], "entry": round(pos["entry"], 2),
+        "side": pos["side"], "entry": round(avg, 2), "levels": n,
         "exit": round(exit_price, 2), "sl": round(pos["sl"], 2),
         "tp": round(pos["tp"], 2), "pnl_pct": round(pnl, 4),
         "result": "win" if pnl > 0 else "loss", "exit_reason": exit_reason,
-        "mfe_pct_of_tp": round(pos["mfe"] / tp_dist, 3) if tp_dist > 0 else 0.0,
-        "mae_pct_of_sl": round(pos["mae"] / sl_dist, 3) if sl_dist > 0 else 0.0,
+        "mfe_pct_of_tp": round(mfe_dist / pos["tp_dist"], 3) if pos["tp_dist"] > 0 else 0.0,
+        "mae_pct_of_sl": round(mae_dist / pos["sl_dist"], 3) if pos["sl_dist"] > 0 else 0.0,
     })
 
 
@@ -64,8 +91,8 @@ def simulate(df: pd.DataFrame, params=DEFAULT_PARAMS, fee: float = FEE,
              start: int = WARMUP, end: int = None) -> BacktestResult:
     """
     df = ต้อง add_indicators แล้ว. backtest ช่วง index [start, end)
-    แยกจาก add_indicators เพื่อให้ optimizer คำนวณ indicator ครั้งเดียวบน full df
-    แล้ว backtest train/test portion โดย test ได้ indicator ที่ warm จาก train
+    Position management: SL/TP (priority) → reverse (signal ตรงข้าม) →
+    pyramid (signal เดิมทาง + n_levels < max_pyramid → เฉลี่ย entry)
     """
     trades = []
     pos = None
@@ -76,27 +103,25 @@ def simulate(df: pd.DataFrame, params=DEFAULT_PARAMS, fee: float = FEE,
         ts = df.index[i]
         sig = generate_signal(df.iloc[:i + 1], params)   # เรียกครั้งเดียว/candle
 
-        # 1) มี position → อัปเดต MFE/MAE แล้วเช็ค exit (SL/TP ก่อน, แล้วค่อย reverse)
         if pos is not None:
-            if pos["side"] == "LONG":
-                pos["mfe"] = max(pos["mfe"], row["high"] - pos["entry"])
-                pos["mae"] = max(pos["mae"], pos["entry"] - row["low"])
-            else:
-                pos["mfe"] = max(pos["mfe"], pos["entry"] - row["low"])
-                pos["mae"] = max(pos["mae"], row["high"] - pos["entry"])
+            # update MFE/MAE (เก็บราคา high/low สุด — คำนวณ pct ตอน exit จาก avg)
+            pos["mfe_price"] = (max(pos["mfe_price"], row["high"]) if pos["side"] == "LONG"
+                                else min(pos["mfe_price"], row["low"]))
+            pos["mae_price"] = (min(pos["mae_price"], row["low"]) if pos["side"] == "LONG"
+                                else max(pos["mae_price"], row["high"]))
 
             hit = _check_exit(pos, row["high"], row["low"])
             if hit:
-                # SL/TP มาก่อน (priority)
-                exit_price, reason = hit
+                exit_price, reason = hit           # 1) SL/TP priority
                 _record(trades, pos, exit_price, reason, ts, fee)
                 pos = None
-            elif params.reverse and sig and sig["signal"] != pos["side"]:
-                # ยังไม่โดน SL/TP + signal กลับข้าง → ปิดที่ close แล้วเปิดใหม่ทันที
-                _record(trades, pos, row["close"], "reverse", ts, fee)
-                pos = _open_pos(sig, ts)
+            elif sig and sig["signal"] != pos["side"]:
+                if params.reverse:                 # 2) signal ตรงข้าม → reverse
+                    _record(trades, pos, row["close"], "reverse", ts, fee)
+                    pos = _open_pos(sig, ts)
+            elif sig and sig["signal"] == pos["side"] and pos["n_levels"] < params.max_pyramid:
+                _add_pyramid(pos, sig)             # 3) signal เดิมทาง → pyramid
 
-        # 2) ไม่มี position + มี signal → เปิดใหม่
         if pos is None and sig:
             pos = _open_pos(sig, ts)
 

@@ -35,6 +35,7 @@ class StrategyParams:
 
     # Position management
     reverse: bool = False    # True = ถือไม้ + signal ตรงข้าม → ปิด + กลับข้างทันที
+    max_pyramid: int = 1     # จำนวนไม้สูงสุดต่อ position (1 = ไม่ pyramid); >1 = เพิ่มไม้เมื่อ signal เดิมทาง
 
     def to_dict(self) -> dict:
         return asdict(self)
