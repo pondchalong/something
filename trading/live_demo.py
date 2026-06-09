@@ -43,9 +43,14 @@ def run():
             df = fetch_ohlcv(timeframe=params.timeframe)
             df_htf = fetch_htf_ohlcv(timeframe=params.timeframe)
             df = add_indicators(df, df_htf, params)
-            sig = generate_signal(df, params)
-            latest = df.iloc[-1]
-            current = df.index[-1]
+
+            # ใช้แท่ง "ปิดแล้ว" (iloc[:-1]) สำหรับ signal — แท่ง iloc[-1] ยังก่อตัว
+            # (indicator ไม่ final → signal กระพริบ + พลาด signal ตอนแท่งปิด)
+            # ตรงกับ backtest/replay ที่ใช้แท่งปิด
+            df_closed = df.iloc[:-1]
+            sig = generate_signal(df_closed, params)
+            current = df_closed.index[-1]   # timestamp แท่งปิดล่าสุด
+            latest = df.iloc[-1]            # แท่งปัจจุบัน (real-time) — ใช้ track MFE/MAE
 
             # --- DRY_RUN: log signal เฉยๆ ---
             if DRY_RUN:
@@ -74,6 +79,19 @@ def run():
                 # ไม้ปิดแล้ว (SL/TP โดน) → บันทึก outcome
                 record_closed_trade(ex, open_trade)
                 clear_open_trade()
+
+            elif has_pos and not open_trade:
+                # orphan position — มี position แต่ไม่มี state (เปิดก่อน tracking /
+                # SL-TP ตั้งไม่ได้ / state หาย) → ปิดทิ้ง กัน deadlock + position เปลือย
+                logger.warning("พบ orphan position (ไม่มี open_trade state) → ปิดทิ้ง")
+                p = get_open_position(ex, SYMBOL)
+                try:
+                    c = abs(float(p["contracts"]))
+                    cs = "sell" if p["side"] == "long" else "buy"
+                    ex.create_order(SYMBOL, "market", cs, c, None, {"reduceOnly": True})
+                    logger.info("ปิด orphan สำเร็จ — รอบหน้าเปิดไม้ใหม่ได้")
+                except Exception as e:
+                    logger.error(f"ปิด orphan ไม่ได้: {str(e)[:60]}")
 
             elif not has_pos and sig and current != last_candle:
                 # ว่าง + มี signal → เปิดใหม่
