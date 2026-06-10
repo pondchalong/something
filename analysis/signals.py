@@ -117,6 +117,14 @@ def generate_signal(df: pd.DataFrame, params=DEFAULT_PARAMS) -> dict | None:
     if not signal_type:
         return None
 
+    # --- Quality filters (จาก data analysis: HTF align + เลี่ยง HIGH vol เพิ่ม edge) ---
+    if params.htf_filter:
+        hb = latest.get("htf_macd_bull")
+        if pd.notna(hb) and (signal_type == "LONG") != bool(hb):
+            return None   # signal สวน trend ใหญ่ → ตัด (winrate ต่ำ)
+    if params.skip_high_vol and latest.get("volatility") == "HIGH":
+        return None       # volatility สูง → ตัด (winrate ~0%)
+
     score = _confluence_score(signal_type, latest)
     # กรองสัญญาณคุณภาพต่ำ (confluence ต่ำกว่า params.confluence_min)
     if score < params.confluence_min:

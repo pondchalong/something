@@ -143,6 +143,7 @@ EMA20/50, RSI(14), MACD(12,26,9), Bollinger Bands(20,2), ATR(14)
 - **Trigger:** SuperTrend flip (หลัก) หรือ MACD histogram cross + EMA alignment (รอง)
 - **Confluence score 0–8:** นับจาก EMA, RSI zone, MACD, SuperTrend, VIDYA, HTF MACD, SMC structure
 - **กรอง:** ถ้า confluence < `params.confluence_min` → ไม่ส่งสัญญาณ (ลด false signal)
+- **Quality filters (จาก data analysis):** `params.htf_filter` (เทรดเฉพาะตาม HTF MACD trend) · `params.skip_high_vol` (ไม่เทรดตอน volatility=HIGH). *data ชี้: HIGH vol winrate ~0%, signal สวน HTF winrate ต่ำ. backtest: baseline -2.7% → skip_high_vol +5.2% (train+test บวก, Sharpe +1.09). edge ยังบาง + sample เล็ก — validate เพิ่มด้วย demo*
 - **Output:** signal (LONG/SHORT), entry, SL, TP, R:R, winrate (40–85% จาก score), risk (จาก volatility cluster + RSI)
 - **SL/TP:** SL = ATR × `params.atr_multiplier`, TP = SL × `params.risk_reward`
 - **Parameterized (Phase 2):** `generate_signal(df, params)` + `add_indicators(df, df_htf, params)` รับ `StrategyParams` (default = ค่าเดิม → Phase 1 ทำงานเหมือนเดิม). optimizer ปรับ params ได้
