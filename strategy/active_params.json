@@ -2,10 +2,14 @@
   "atr_multiplier": 1.5,
   "risk_reward": 2.0,
   "confluence_min": 3,
+  "htf_filter": false,
+  "skip_high_vol": true,
   "st_factor": 3.0,
   "st_atr_len": 10,
   "ema_fast": 20,
   "ema_slow": 50,
   "rsi_len": 14,
-  "timeframe": "15m"
+  "timeframe": "15m",
+  "reverse": false,
+  "max_pyramid": 1
 }
