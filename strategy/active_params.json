@@ -4,6 +4,7 @@
   "confluence_min": 3,
   "htf_filter": false,
   "skip_high_vol": true,
+  "macd_only": true,
   "st_factor": 3.0,
   "st_atr_len": 10,
   "ema_fast": 20,
