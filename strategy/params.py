@@ -22,6 +22,7 @@ class StrategyParams:
     confluence_min: int = 3          # confluence ต่ำกว่านี้ → ไม่ส่งสัญญาณ
     htf_filter: bool = False         # True = เทรดเฉพาะตาม HTF MACD (trend ใหญ่)
     skip_high_vol: bool = False      # True = ไม่เทรดตอน volatility = HIGH
+    macd_only: bool = False          # True = ใช้เฉพาะ MACD cross trigger (ตัด SuperTrend flip ที่ winrate ต่ำ)
 
     # SuperTrend (ML Adaptive)
     st_factor: float = 3.0

@@ -97,12 +97,13 @@ def generate_signal(df: pd.DataFrame, params=DEFAULT_PARAMS) -> dict | None:
     st_flip_bear = latest.get("st_flip_bear", False)
 
     signal_type = None
+    st_triggered = False
 
-    # Primary trigger: SuperTrend flip (แรงสุด)
+    # Primary trigger: SuperTrend flip
     if st_flip_bull and rsi < 70:
-        signal_type = "LONG"
+        signal_type = "LONG"; st_triggered = True
     elif st_flip_bear and rsi > 30:
-        signal_type = "SHORT"
+        signal_type = "SHORT"; st_triggered = True
 
     # Secondary trigger: MACD histogram cross + EMA alignment
     elif (ema20 is not None and ema50 is not None
@@ -115,6 +116,10 @@ def generate_signal(df: pd.DataFrame, params=DEFAULT_PARAMS) -> dict | None:
         signal_type = "SHORT"
 
     if not signal_type:
+        return None
+
+    # macd_only: ตัด SuperTrend flip trigger (data: ST_flip winrate 21% vs MACD cross 50%)
+    if params.macd_only and st_triggered:
         return None
 
     # --- Quality filters (จาก data analysis: HTF align + เลี่ยง HIGH vol เพิ่ม edge) ---
