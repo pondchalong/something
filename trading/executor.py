@@ -75,15 +75,22 @@ def _cancel_all(ex, symbol=SYMBOL):
 
 
 def get_open_position(ex, symbol=SYMBOL):
-    """คืน position ที่เปิดอยู่ (ถ้ามี) — None ถ้าไม่มี"""
+    """
+    คืน position ที่เปิดอยู่ (ถ้ามี) — None ถ้าไม่มี
+
+    retry transient errors ก่อนยอมแพ้: testnet /fapi/v3/positionRisk 502/timeout บ่อย
+    ถ้าไม่ retry → คืน None ทั้งที่ query แค่พลาดชั่วคราว → caller เข้าใจผิดว่า "ไม่มี
+    position" (live_demo อาจบันทึกไม้ปิดทั้งที่ยังถืออยู่ / เปิดไม้ซ้ำ)
+    """
     try:
-        positions = ex.fetch_positions([symbol])
-        for p in positions:
-            contracts = float(p.get("contracts") or 0)
-            if abs(contracts) > 0:
-                return p
+        positions = _retry(lambda: ex.fetch_positions([symbol]))
     except Exception as e:
-        logger.warning(f"fetch_positions ไม่ได้: {e}")
+        logger.warning(f"fetch_positions ไม่ได้ (หลัง retry): {str(e)[:80]}")
+        return None
+    for p in positions:
+        contracts = float(p.get("contracts") or 0)
+        if abs(contracts) > 0:
+            return p
     return None
 
 
@@ -137,29 +144,44 @@ def execute_signal(signal: dict, symbol=SYMBOL) -> dict:
             return {"status": "failed", "reason": "entry_error"}
         logger.warning("entry timeout แต่ position เปิดจริง — ไปตั้ง SL/TP ต่อ")
 
-    # ยืนยัน position เปิดจริงก่อนตั้ง SL/TP
+    # ยืนยัน position เปิดจริง + ดึง entry จริงก่อนตั้ง SL/TP
     time.sleep(1)
-    if not get_open_position(ex, symbol):
+    pos = get_open_position(ex, symbol)
+    if not pos:
         logger.error("ไม่พบ position หลัง entry — ยกเลิก")
         return {"status": "failed", "reason": "no_position_after_entry"}
+
+    # คำนวณ SL/TP จาก entry "จริง" ไม่ใช่ signal price:
+    # market order fill หลัง signal ~1-2s → ราคาขยับ (slippage/drift) ทำให้ stopPrice
+    # เดิมไปอยู่ผิดข้างของ mark price → Binance reject -2021 "would immediately trigger".
+    # ยึด distance เดิม (R:R คงที่) แต่วัดจาก entry จริง → SL/TP อยู่ถูกข้างเสมอ
+    entry_price = float(pos.get("entryPrice") or signal["price"])
+    sl_dist = abs(signal["price"] - signal["sl"])
+    tp_dist = abs(signal["tp"] - signal["price"])
+    if signal["signal"] == "LONG":
+        sl_price, tp_price = entry_price - sl_dist, entry_price + tp_dist
+    else:
+        sl_price, tp_price = entry_price + sl_dist, entry_price - tp_dist
+    sl_price = float(ex.price_to_precision(symbol, sl_price))
+    tp_price = float(ex.price_to_precision(symbol, tp_price))
 
     # SL + TP (reduce-only). ถ้าตั้งไม่ได้ → ปิด position กันเปลือย (no SL/TP = อันตราย)
     try:
         _retry(lambda: ex.create_order(symbol, "STOP_MARKET", opp, size, None,
-                                       {"stopPrice": signal["sl"], "reduceOnly": True}))
+                                       {"stopPrice": sl_price, "reduceOnly": True}))
         _retry(lambda: ex.create_order(symbol, "TAKE_PROFIT_MARKET", opp, size, None,
-                                       {"stopPrice": signal["tp"], "reduceOnly": True}))
+                                       {"stopPrice": tp_price, "reduceOnly": True}))
     except Exception as e:
         logger.error(f"ตั้ง SL/TP ไม่ได้ → ปิด position กันเปลือย: {str(e)[:80]}")
         try:
-            _retry(lambda: ex.create_order(symbol, "market", opp, size, None, {"reduceOnly": True}))
+            close_position(ex, symbol)   # cancel conditional ที่ค้าง + market close
         except Exception as e2:
             logger.error(f"ปิด position ไม่ได้! เช็ค manual ด่วน: {str(e2)[:80]}")
         return {"status": "failed", "reason": "sltp_failed_closed"}
 
     entry = {
         "mode": "LIVE_DEMO", "action": signal["signal"], "symbol": symbol,
-        "entry": signal["price"], "sl": signal["sl"], "tp": signal["tp"], "size": size,
+        "entry": entry_price, "sl": sl_price, "tp": tp_price, "size": size,
     }
     # ไม่ log ตอนเปิด — live_demo เก็บใน open_trade.json + record_closed_trade() log ตอนปิด
     # (มี outcome + MFE/MAE ครบ) กัน log ซ้ำ
@@ -194,13 +216,20 @@ def clear_open_trade():
         os.remove(OPEN_TRADE)
 
 
-def new_open_trade(signal: dict, size=None) -> dict:
-    """สร้าง state ของไม้ที่เพิ่งเปิด (MFE/MAE เริ่มที่ราคา entry)"""
+def new_open_trade(signal: dict, size=None, entry=None, sl=None, tp=None) -> dict:
+    """
+    สร้าง state ของไม้ที่เพิ่งเปิด (MFE/MAE เริ่มที่ราคา entry)
+
+    entry/sl/tp: ถ้าให้มา (จาก fill จริง ใน execute_signal) ใช้แทนค่าจาก signal —
+    กัน slippage ทำให้ stats (MFE/MAE/pnl) + exit_reason เพี้ยนจากราคาที่เข้าจริง
+    """
+    entry_price = entry if entry is not None else signal["price"]
     return {
-        "action": signal["signal"], "entry": signal["price"],
-        "sl": signal["sl"], "tp": signal["tp"], "size": size, "n_levels": 1,
+        "action": signal["signal"], "entry": entry_price,
+        "sl": sl if sl is not None else signal["sl"],
+        "tp": tp if tp is not None else signal["tp"], "size": size, "n_levels": 1,
         "entry_time": datetime.now().isoformat(timespec="seconds"),
-        "mfe_price": signal["price"], "mae_price": signal["price"],
+        "mfe_price": entry_price, "mae_price": entry_price,
         "confluence": signal.get("confluence"), "winrate_est": signal.get("winrate"),
     }
 

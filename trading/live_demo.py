@@ -83,7 +83,9 @@ def run():
                     send_closed_alert(closed)
                     result = execute_signal(sig)
                     if result.get("status") == "executed":
-                        save_open_trade(new_open_trade(sig, result.get("size")))
+                        save_open_trade(new_open_trade(
+                            sig, result.get("size"), entry=result.get("entry"),
+                            sl=result.get("sl"), tp=result.get("tp")))
                         send_alert(sig)
                         logger.info("REVERSE สำเร็จ — เปิดไม้ตรงข้าม")
                     else:
@@ -134,7 +136,9 @@ def run():
                 logger.info(f"พบสัญญาณ: {sig['signal']} @ {sig['price']}")
                 result = execute_signal(sig)
                 if result.get("status") == "executed":
-                    save_open_trade(new_open_trade(sig, result.get("size")))
+                    save_open_trade(new_open_trade(
+                        sig, result.get("size"), entry=result.get("entry"),
+                        sl=result.get("sl"), tp=result.get("tp")))
                     send_alert(sig)
                     logger.info("เปิดไม้ + เริ่ม track MFE/MAE")
                 else:
