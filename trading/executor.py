@@ -26,12 +26,18 @@ FEE = 0.0004  # 0.04% taker
 
 # Binance testnet ไม่เสถียร (502/timeout บ่อย) → retry transient errors
 _TRANSIENT_KW = ("502", "503", "-1007", "timeout", "bad gateway", "backend", "temporarily")
+# rate limit / IP ban (418 teapot, 429, -1003) → ห้าม retry: ยิ่ง retry ยิ่งโดนแบนนานขึ้น
+_RATELIMIT_KW = ("-1003", "418", "429", "too many request", "ip banned", "way too many")
 
 
 def _is_transient(e) -> bool:
+    msg = str(e).lower()
+    # rate-limit/ban มาก่อน: ccxt ห่อ 418/429 เป็น DDoSProtection (subclass NetworkError)
+    # ถ้าปล่อยให้ retry จะยิงซ้ำตอนโดนแบน → ban นานขึ้น. ต้องหยุดยิงให้ ban หมดอายุเอง
+    if isinstance(e, ccxt.DDoSProtection) or any(k in msg for k in _RATELIMIT_KW):
+        return False
     if isinstance(e, ccxt.NetworkError):  # รวม ExchangeNotAvailable, RequestTimeout
         return True
-    msg = str(e).lower()
     return any(k in msg for k in _TRANSIENT_KW)
 
 
