@@ -18,7 +18,8 @@ from trading.executor import (
     load_open_trade, save_open_trade, clear_open_trade,
     new_open_trade, update_excursion, record_closed_trade,
 )
-from strategy.params import load_active
+import os
+from strategy.params import load_active, ACTIVE_PATH
 from alerts.telegram import send_alert, send_closed_alert, send_skip_alert
 from utils.logger import logger
 from config import SYMBOL, DRY_RUN
@@ -28,8 +29,16 @@ POLL_INTERVAL = 60
 
 def run():
     params = load_active()
+    src = "active_params.json" if os.path.exists(ACTIVE_PATH) else "DEFAULT (ไม่พบ active_params.json!)"
     logger.info(f"Live Demo เริ่ม | {SYMBOL} | tf={params.timeframe} | DRY_RUN={DRY_RUN}")
-    logger.info(f"Active params: {params.to_dict()}")
+    logger.info(f"params source: {src}")
+    logger.info(f"quality filters → macd_only={params.macd_only} skip_high_vol={params.skip_high_vol} "
+                f"confluence_min={params.confluence_min} | rr={params.risk_reward} atr_mult={params.atr_multiplier}")
+    # เตือนถ้ารัน config ที่ backtest พบว่าขาดทุน (macd_only=False = ST-flip whipsaw)
+    if not params.macd_only:
+        logger.warning("macd_only=False — backtest พบ config นี้ขาดทุน (-5.5%, ST-flip whipsaw). "
+                       "ควรเปิด macd_only ใน active_params.json ก่อนรันจริง")
+    logger.info(f"full params: {params.to_dict()}")
 
     ex = None
     if not DRY_RUN:

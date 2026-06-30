@@ -13,6 +13,8 @@ EXCHANGE_PRIORITY = ["binance", "bybit", "kraken", "coinbase", "kucoin", "gateio
 _exchange_cache = {}      # name -> ccxt instance
 _working_name = None      # exchange ที่ใช้ได้ล่าสุด
 
+PER_REQUEST = 1000        # ccxt per-request cap (Binance ให้ ≤1000/ครั้ง) — เกินนี้ต้อง paginate
+
 
 def _get_instance(name: str):
     # enableRateLimit: ให้ ccxt throttle เอง กัน 418/-1003 (IP ban) — IP เดียวโดนแบน
@@ -59,11 +61,56 @@ def _fetch_with_fallback(method: str, *args, preferred=None, **kwargs):
     raise RuntimeError(f"ทุก exchange ใช้ไม่ได้ — ตัวสุดท้าย: {last_err}")
 
 
+def _fetch_ohlcv_paged(symbol, timeframe, total, preferred=None):
+    """ดึง OHLCV เกิน per-request cap ด้วยการ paginate (Binance ให้ทีละ ≤1000 แท่ง).
+    lock exchange ตัวเดียวตลอดการ page; ถ้า fail กลางทาง → fallback ตัวถัดไป.
+    enableRateLimit เปิดอยู่ (ccxt throttle เอง) → กัน 418/-1003 ตอนยิงหลายหน้า"""
+    global _working_name
+    names = [preferred] if preferred else _ordered_names()
+    last_err = None
+    for name in names:
+        try:
+            ex = _get_instance(name)
+            tf_ms = ex.parse_timeframe(timeframe) * 1000
+            now = ex.milliseconds()
+            since = now - total * tf_ms
+            rows = []
+            guard = (total // 100) + 10          # กัน loop ค้าง (exchange ที่ให้ batch เล็ก เช่น coinbase)
+            while since < now and guard > 0:
+                guard -= 1
+                batch = ex.fetch_ohlcv(symbol, timeframe, since=since, limit=PER_REQUEST)
+                if not batch:
+                    break
+                rows += batch
+                nxt = batch[-1][0] + tf_ms
+                if nxt <= since:                 # timestamp ไม่ขยับ → หยุด กัน loop ไม่จบ
+                    break
+                since = nxt
+            if not rows:
+                raise RuntimeError("ดึงไม่ได้ (empty)")
+            if _working_name != name:
+                _working_name = name
+                print(f"[fetcher] using exchange: {name} (paged -> {len(rows)} rows)")
+            return rows
+        except Exception as e:
+            last_err = e
+            if _working_name == name:
+                _working_name = None
+            continue
+    raise RuntimeError(f"ทุก exchange ใช้ไม่ได้ (paged) — ตัวสุดท้าย: {last_err}")
+
+
 def fetch_ohlcv(symbol=SYMBOL, timeframe=TIMEFRAME, limit=CANDLE_LIMIT, exchange=None) -> pd.DataFrame:
-    raw = _fetch_with_fallback("fetch_ohlcv", symbol, timeframe=timeframe, limit=limit, preferred=exchange)
+    # limit > PER_REQUEST → paginate (ไม่งั้น Binance cap ที่ 1000 เงียบๆ — backtest ได้ data ไม่ครบ)
+    if limit > PER_REQUEST:
+        raw = _fetch_ohlcv_paged(symbol, timeframe, limit, preferred=exchange)
+    else:
+        raw = _fetch_with_fallback("fetch_ohlcv", symbol, timeframe=timeframe, limit=limit, preferred=exchange)
     df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-    df.set_index("timestamp", inplace=True)
+    df = df.drop_duplicates("timestamp").set_index("timestamp").sort_index()
+    if len(df) > limit:                          # paginate อาจเกินเล็กน้อย → ตัดให้เหลือ limit ล่าสุด
+        df = df.iloc[-limit:]
     return df
 
 

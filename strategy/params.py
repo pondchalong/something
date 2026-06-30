@@ -40,6 +40,19 @@ class StrategyParams:
     reverse: bool = False    # True = ถือไม้ + signal ตรงข้าม → ปิด + กลับข้างทันที
     max_pyramid: int = 1     # จำนวนไม้สูงสุดต่อ position (1 = ไม่ pyramid); >1 = เพิ่มไม้เมื่อ signal เดิมทาง
 
+    # Exit management (profit protection) — ทุกตัว default OFF/neutral → Phase 1 เหมือนเดิม
+    # หน่วยเป็น R = เท่าของ SL distance (1R = ระยะจาก entry ถึง SL เดิม)
+    breakeven: bool = False        # ขยับ SL เป็นทุน หลังกำไรถึง be_trigger_r
+    be_trigger_r: float = 1.0      # favorable excursion ที่ trigger BE
+    be_buffer_r: float = 0.0       # ขยับเลยทุนไปกี่ R (0 = ทุนพอดี, >0 = ล็อกกำไรนิดหน่อย)
+    trail: bool = False            # trailing stop (ตาม high-water)
+    trail_trigger_r: float = 1.0   # เริ่ม trail หลังกำไรถึงกี่ R
+    trail_dist_r: float = 1.0      # SL ตามห่างจาก high-water กี่ R
+    partial_tp: bool = False       # ปิดบางส่วนเมื่อถึง partial_tp_r
+    partial_tp_r: float = 1.0      # ระยะ (R) ที่ปิดบางส่วน
+    partial_tp_pct: float = 0.5    # สัดส่วนที่ปิด (0.5 = ครึ่งไม้)
+    partial_be: bool = True        # หลังปิดบางส่วน → ขยับ SL ส่วนที่เหลือเป็นทุน (มีผลเมื่อ partial_tp=True)
+
     def to_dict(self) -> dict:
         return asdict(self)
 
