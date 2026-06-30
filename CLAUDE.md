@@ -148,7 +148,9 @@ EMA20/50, RSI(14), MACD(12,26,9), Bollinger Bands(20,2), ATR(14)
   - `params.skip_high_vol` — ไม่เทรดตอน volatility=HIGH (HIGH vol winrate ~0%)
   - `params.macd_only` — ใช้เฉพาะ MACD cross trigger, ตัด SuperTrend flip (**ST_flip winrate 21% vs MACD cross 50%** — ST flip บน 15m = noise)
   - *backtest (limit 4000): macd_only +2.8% PF2.22 Sharpe+1.23 (ดีสุด + มีเหตุผลเชิงตรรกะ) · skip_high_vol -1.4% (overfit period สั้น) · macd_only ครอบคลุม skip_high_vol (ผลเท่ากัน)*
+  - *re-validate 30 มิ.ย. 2026 (5000 แท่ง/52d, **paginated จริง** — ก่อนหน้านี้ `--limit 4000` ได้แค่ 1000 เพราะ fetcher ไม่ paginate, ดู Known Issues): **ACTIVE (macd_only+skip_high_vol) +9% PF1.48 vs OLD (ไม่มี filter) -5.5% PF0.90 DD10.8%** — filter ตัดไม้ขยะครึ่งนึง (164→74 ไม้) พลิกขาดทุนเป็นกำไร. ยืนยันว่า "เทรดน้อย-คัดดี" ดีกว่า "เทรดถี่"*
   - ⚠️ **ระวัง overfit:** filter หาจาก historical period เดียว — skip_high_vol ดูดีช่วงสั้นแต่หายช่วงยาว. macd_only น่าเชื่อกว่าเพราะมีเหตุผล แต่ sample เล็ก — **forward validate ด้วย demo จริงเสมอ**
+  - 📌 **demo CSV (7–29 มิ.ย.) ที่ขาดทุนเป็นของผสม:** skip_high_vol เพิ่งเปิด 11 มิ.ย., macd_only เพิ่งเปิด 16 มิ.ย. → ไม้ช่วงต้นรัน params เก่า (ไม่มี filter). ไม่ใช่หลักฐานว่า strategy ปัจจุบันแย่
 - **Output:** signal (LONG/SHORT), entry, SL, TP, R:R, winrate (40–85% จาก score), risk (จาก volatility cluster + RSI)
 - **SL/TP:** SL = ATR × `params.atr_multiplier`, TP = SL × `params.risk_reward`
 - **Parameterized (Phase 2):** `generate_signal(df, params)` + `add_indicators(df, df_htf, params)` รับ `StrategyParams` (default = ค่าเดิม → Phase 1 ทำงานเหมือนเดิม). optimizer ปรับ params ได้
@@ -206,11 +208,17 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 - **Position sizing risk-based:** `size = (balance × RISK_PER_TRADE) / sl_distance`
 - **SL/TP คำนวณจาก entry จริง (ไม่ใช่ signal price):** หลัง market fill ดึง `entryPrice` จาก position แล้ว recompute SL/TP จาก distance เดิม (R:R คงที่) วัดจาก entry จริง — กัน slippage/drift ทำ stopPrice ไปอยู่ผิดข้าง → error -2021 (ดู Known Issues). entry/sl/tp จริงส่งกลับใน result → `new_open_trade()` ใช้ track MFE/MAE/stats ให้ตรง
 - 1 position ต่อครั้ง · **`DRY_RUN=True` (default) = log อย่างเดียว ไม่ยิง order** → ทดสอบ logic ก่อนเปิดจริง
-- **Position management (3 โหมด, backtest + executor + live_demo ใช้ logic เดียวกัน):**
+- **Position management (reverse/pyramid: backtest + executor + live_demo ใช้ logic เดียวกัน):**
   - **Reverse (`params.reverse`, default False):** ถือไม้ + signal กลับข้าง → ปิด (`close_position()`) + เปิดตรงข้าม (exit_reason="reverse")
   - **Pyramid (`params.max_pyramid`, default 1):** ถือไม้ + signal เดิมทาง + level < max → เพิ่มไม้ (`add_to_position()`): เฉลี่ย entry, recompute SL/TP จาก avg, risk แบ่ง (`RISK_PER_TRADE/max_pyramid` ต่อ level)
   - **Priority:** SL/TP > reverse > pyramid
   - *หมายเหตุ: backtest พบว่าทั้ง reverse + pyramid แย่กว่าบน strategy ปัจจุบัน (reverse -4%, pyramid -9% DD 12%) — เปิดเมื่อ optimize ยืนยันเท่านั้น*
+- **Exit management / profit protection (params default OFF — ปัจจุบันมีใน `backtest/engine.py` เท่านั้น, ยังไม่ port เข้า executor/live_demo):**
+  - **Breakeven (`breakeven`, `be_trigger_r`, `be_buffer_r`):** กำไรถึง `be_trigger_r` R → ขยับ SL เป็นทุน
+  - **Trailing (`trail`, `trail_trigger_r`, `trail_dist_r`):** กำไรถึง trigger → SL ตาม high-water ห่าง `trail_dist_r` R (ขยับเฉพาะทางกำไร ไม่คลาย)
+  - **Partial TP (`partial_tp`, `partial_tp_r`, `partial_tp_pct`, `partial_be`):** ถึง `partial_tp_r` R → ปิดบางส่วน + (option) ขยับที่เหลือเป็นทุน
+  - engine เช็ค conservative: SL/TP/partial ของระดับแท่งก่อน → ค่อยอัปเดต trail/BE จาก high/low แท่งนี้ (มีผลแท่งถัดไป, ไม่ lookahead). fee model + MFE/MAE คงเดิม (ปิด features = ผลเท่าเดิมเป๊ะ)
+  - ⚠️ **finding (5000 แท่ง/52d, paginated):** exit management **ลด return/Sharpe ทุกแบบ** — baseline SL/TP→2R ดีสุด (+9% PF1.48 Sharpe1.43) เพราะ edge มาจากไม้ที่วิ่งยาวถึง 2R, trail/partial ไป "ตัดกำไรเร็ว" ฆ่า runner. winrate ขึ้นจริง (52–70%) แต่ expectancy ลด. ตัวเดียวที่น่าสนใจ = **BE+trail** (ลด MaxDD แลก return นิดหน่อย) ถ้าต้องการ equity เรียบ. **อย่าเปิด default — เปิดเมื่อ optimize/regime ใหม่ยืนยัน**
 - `trading/live_demo.py` — state machine: ถือไม้→update MFE/MAE ทุก loop, position หาย→`record_closed_trade()`, ว่าง+signal→execute
 - **Trade stats (MFE/MAE):** เปิดไม้ → `open_trade.json` track high/low ระหว่างถือ; ปิด → บันทึก outcome ลง `trade_log.json`: win/loss, exit price/reason (SL/TP), pnl%, **MFE%** (ไปได้เปรียบสุด), **MAE%** (ไปเสียเปรียบสุด), duration. ดู + Export CSV ใน dashboard Demo Trades
 
@@ -282,6 +290,7 @@ py -3.12 -m trading.live_demo
 - **pip:** บน Windows ใช้ `python -m pip` / `py -3.12 -m pip` (pip ไม่อยู่ใน PATH)
 - **Geo-restriction:** Binance + Bybit block US — *แก้แล้ว* ด้วยการตั้ง Railway region = Southeast Asia (ทุก exchange ใช้ได้). Multi-exchange fallback ยังคงไว้เพื่อ robustness
 - **Coinbase candle cap:** ให้สูงสุด ~298 candles/request (น้อยกว่าที่ขอ 500) — พอสำหรับ ATR(200) แต่ valid น้อย; Binance (primary) ไม่ cap
+- **fetch_ohlcv pagination (แก้แล้ว 30 มิ.ย. 2026):** เดิม `fetch_ohlcv()` ส่ง `limit` ตรงเข้า ccxt → Binance cap 1000 แท่ง/request **เงียบๆ** = `backtest`/`optimizer --limit 4000` จริงๆ ได้แค่ 1000 (backtest เก่าทั้งหมด effective ≤1000 แท่ง). **แก้:** `limit > PER_REQUEST(1000)` → `_fetch_ohlcv_paged()` paginate ด้วย `since` (lock exchange ตัวเดียว, fallback ถ้า fail กลางทาง) + dedupe/sort/tail. `enableRateLimit` กัน 418/-1003 ตอนยิงหลายหน้า
 - **pandas-ta column names:** BB columns เป็น `BBU_20_2.0_2.0` (มี `_2.0` ซ้ำ) ใน version 0.4.x
 - **Telegram:** ต้องกด `/start` กับ bot ก่อน ส่งครั้งแรกถึงจะได้
 - **ccxt Binance futures testnet:** ccxt 4.5+ `set_sandbox_mode(True)` บน binance/binanceusdm futures → raise `NotSupported` (deprecated). แก้ใน `get_testnet_exchange()`: ใช้ `binanceusdm` + copy `urls['test']` fapi endpoints → `urls['api']` + `options.fetchCurrencies=False` (เลี่ยง sapi ที่ไม่มี testnet URL). Bybit testnet ยัง support set_sandbox_mode ปกติ (เก็บเป็น fallback)
