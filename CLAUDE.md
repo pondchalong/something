@@ -74,7 +74,8 @@ something/
 │   ├── indicators.py        # EMA, RSI, MACD, BB, ATR + เรียก advanced (รับ params)
 │   ├── indicators_advanced.py  # 4 indicators จาก TradingView (ดู Indicators)
 │   ├── signals.py           # Signal engine + confluence scoring (รับ params)
-│   └── trade_stats.py       # วิเคราะห์ demo trades ที่เก็บจริง (forward validation, ดู Trade Stats)
+│   ├── trade_stats.py       # วิเคราะห์ demo trades ที่เก็บจริง (forward validation, ดู Trade Stats)
+│   └── reconcile.py         # กระทบยอด trade_log กับ fill จริงจาก Binance API (ดู Reconcile)
 ├── alerts/
 │   └── telegram.py          # ส่ง Telegram message
 ├── utils/
@@ -246,6 +247,13 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 - ค่า fee ไม่ใช่ตัวปัญหาหลัก: median 0.22R ต่อไม้ (มีแค่ 4/93 ไม้ที่ fee > 0.5R)
 - 👉 **ลำดับที่ต้องทำ: แก้บั๊ก exit/position ก่อน → เก็บข้อมูลใหม่ → ค่อยตัดสิน strategy. อย่า optimize params บนข้อมูลชุดนี้**
 
+**Reconcile — เทียบ log กับของจริง (analysis/reconcile.py):**
+- ดึง fill จริงจาก Binance API (`fetch_my_trades` + paginate) → ประกอบเป็นไม้เองด้วยการไล่ position สะสม (พอกลับมา 0 = ไม้ปิด) → **ไม่พึ่ง state ฝั่งเราซึ่งเป็นตัวที่เคยพัง**
+- ใช้ `realizedPnl` + `commission` ที่ Binance ส่งมากับแต่ละ fill = **ground truth** ที่บั๊กฝั่งเราแตะไม่ได้
+- จับคู่กับ `trade_log.json` ด้วยเวลาเปิดไม้ (±10 นาที) แล้วรายงาน: exit price ไม่ตรงกี่ไม้, PnL ไม่ตรงกี่ไม้, **ไม้ผี** (log มีแต่ exchange ไม่มี = บั๊ก query position), **ไม้ที่ bot พลาดไม่บันทึก**, และ PnL รวมสองฝั่งต่างกันกี่จุด
+- `--dump fills.json` เก็บ fill ดิบไว้วิเคราะห์ offline ทีหลัง · `--file fills.json` อ่านจากไฟล์ ไม่ต้องต่อ network (ใช้ตอน environment บล็อก exchange API)
+- test: `py -3.12 test_reconcile.py` (11 เคส, offline)
+
 **Self-learning scope:** ตอนนี้ = optimize params ของ strategy ปัจจุบัน (ยังไม่ใช่ RL discover strategy ใหม่)
 
 **Promote (manual approve):** optimizer หา candidate → ดูใน dashboard → กด Apply → executor ใช้ params ใหม่ (ต้อง approve เสมอ ไม่ auto)
@@ -313,6 +321,12 @@ py -3.12 test_trade_stats.py                          # unit test
 # test lifecycle ของไม้ + state machine (offline ทั้งคู่ ไม่ต้องต่อ testnet)
 py -3.12 test_executor_exit.py
 py -3.12 test_live_demo_loop.py
+
+# กระทบยอด log ที่ bot บันทึก กับ fill จริงจาก Binance (ต้องมี testnet API key)
+py -3.12 -m analysis.reconcile --days 60
+py -3.12 -m analysis.reconcile --days 60 --dump fills.json   # เก็บ raw ไว้ส่งต่อ/วิเคราะห์ offline
+py -3.12 -m analysis.reconcile --file fills.json             # อ่านจากไฟล์ ไม่ต้องต่อ network
+py -3.12 test_reconcile.py
 ```
 
 ---
