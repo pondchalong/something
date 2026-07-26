@@ -9,4 +9,7 @@ sourcecode_indicators/
 backtest/results/
 trading/trade_log.json
 trading/open_trade.json
+# ข้อมูลดิบที่ save จาก UI ของ exchange (ไฟล์ใหญ่ ใช้อ้างอิงชั่วคราว)
+htmlcode/
+fills*.json
 # หมายเหตุ: strategy/active_params.json = strategy ที่ใช้จริง → commit เพื่อ sync ไป Railway
