@@ -224,6 +224,16 @@ def render_demo():
     st.caption(f"avg {a['avg_r']:+.2f}R ต่อไม้ · แพ้ติดกันสูงสุด {m['max_consecutive_losses']} ไม้ "
                f"· metrics ชุดเดียวกับ backtest → เทียบกันได้ตรงๆ")
 
+    ei = a.get("exit_integrity") or {}
+    if ei.get("suspicious"):
+        st.error(
+            f"🚨 **exit price เชื่อไม่ได้ {ei['suspicious']}/{ei['checked']} ไม้ "
+            f"({ei['suspicious_pct']:.0f}%)** — ไม้ควรจบที่ SL หรือ TP เท่านั้น แต่กลุ่มนี้ปิดที่ราคาอื่น "
+            f"(ซ้ำกับไม้อื่น {ei['duplicate_exit_price']} ไม้). "
+            f"ในกลุ่มนี้เคยวิ่งถึง ~2R แล้วถูกตัดทิ้ง {ei['suspicious_reached_2r']} ไม้ "
+            f"→ สถิติรวมแย่กว่าความจริง **อย่าเพิ่งใช้ตัวเลขนี้ตัดสิน strategy หรือ optimize params**"
+        )
+
     q = a["quality"]
     if q["exit_equals_entry"]:
         st.warning(f"⚠️ {q['exit_equals_entry']} ไม้มี exit = entry (ดึงราคาปิดจาก testnet ไม่ได้ "

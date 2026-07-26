@@ -5,7 +5,7 @@
 """
 from analysis.trade_stats import (
     closed_trades, to_metric_trades, _r_multiple, _mfe_r,
-    breakdown, data_quality, exit_management_whatif, analyze,
+    breakdown, data_quality, exit_management_whatif, exit_integrity, analyze,
 )
 
 FEE = 0.0004
@@ -98,6 +98,31 @@ def test_exit_whatif_counts():
     assert w["losses"] == 1 and w["wins"] == 1
     assert w["loss_reached_1r"] == 1        # LOSS เคยไป 1.5R
     assert w["wins_with_deep_mae"] == 0     # WIN MAE 50% < 70%
+
+
+def test_exit_integrity_accepts_clean_sl_tp():
+    """WIN ปิดที่ TP พอดี, LOSS ปิดที่ SL พอดี → ไม่ควรถูกจับว่าน่าสงสัย"""
+    ei = exit_integrity([WIN, LOSS])
+    assert ei["suspicious"] == 0, f"ไม้สะอาดถูกจับผิด: {ei['worst']}"
+    assert ei["duplicate_exit_price"] == 0
+
+
+def test_exit_integrity_flags_midway_exit():
+    """ปิดกลางทาง (ไม่ใช่ทั้ง SL และ TP) = บันทึกผิด/ถูกตัดกลางทาง"""
+    mid = {**WIN, "exit": 101.0, "pnl_pct": 0.0092}   # entry 100 SL 98 TP 104
+    ei = exit_integrity([mid])
+    assert ei["suspicious"] == 1
+    approx(ei["worst"][0]["off_r"], 1.5)              # ห่างจาก TP 3 จุด = 1.5R
+    assert ei["suspicious_reached_2r"] == 1           # MFE ถึง 2R → น่าจะได้ TP จริง
+
+
+def test_exit_integrity_flags_duplicate_exit():
+    """exit price ซ้ำเป๊ะข้ามไม้ = หยิบ fill ของไม้ก่อนหน้ามาใช้"""
+    a = {**WIN, "exit": 104.0}
+    b = {**WIN, "entry": 103.0, "sl": 101.0, "tp": 107.0, "exit": 104.0,
+         "entry_time": "2026-07-03T10:00:00"}
+    ei = exit_integrity([a, b])
+    assert ei["duplicate_exit_price"] == 2
 
 
 def test_empty_log():

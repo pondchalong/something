@@ -243,6 +243,53 @@ def _mfe_r(t: dict) -> float:
     return abs(float(t.get("mfe_pct", 0.0))) * float(t["entry"]) / sl_dist
 
 
+def exit_integrity(trades: list, tol: float = 0.15) -> dict:
+    """
+    เช็คว่า exit price ที่บันทึก "เป็นไปได้" ไหม — ไม้ควรจบที่ SL หรือ TP เท่านั้น
+
+    ไม้ที่ exit ไม่ตรงทั้ง SL และ TP (เกิน tol × 1R) = บันทึกผิดหรือถูกปิดกลางทาง
+    สาเหตุที่เจอจริง:
+    - `get_open_position()` คืน None ตอน query พลาด (testnet 502 หลัง retry หมด)
+      → live_demo คิดว่าไม้ปิดแล้ว → `record_closed_trade()` ไปหยิบ fill ของ "ไม้ก่อนหน้า"
+      มาเป็น exit price (เพราะเลือก fill ฝั่งตรงข้ามตัวล่าสุด) → ราคาซ้ำกับไม้อื่น
+    - SL/TP ของไม้เก่าไม่ถูก cancel หลังไม้ปิด → ค้างไปปิดไม้ถัดไปที่ราคาไม่เกี่ยวข้อง
+
+    ⚠️ ไม้กลุ่มนี้ pnl ที่บันทึกไว้ "เชื่อไม่ได้" — และมันมัก**ตัดไม้ที่กำลังกำไร**ทิ้ง
+    (ไม้ชนะใช้เวลานานกว่า → โดนตัดง่ายกว่าไม้แพ้ที่ชน SL เร็ว) → สถิติจะดูแย่เกินจริง
+    """
+    if not trades:
+        return {}
+    susp, dup_groups = [], defaultdict(list)
+    for t in trades:
+        entry, sl, tp = float(t["entry"]), float(t["sl"]), float(t["tp"])
+        sl_dist = abs(entry - sl)
+        if sl_dist <= 0 or t.get("exit") is None:
+            continue
+        ex = float(t["exit"])
+        off = min(abs(ex - sl), abs(ex - tp)) / sl_dist
+        dup_groups[round(ex, 2)].append(t)
+        if off > tol:
+            susp.append({"entry_time": t.get("entry_time"), "action": t.get("action"),
+                         "entry": entry, "exit": ex, "sl": sl, "tp": tp,
+                         "off_r": round(off, 2), "mfe_r": round(_mfe_r(t), 2)})
+    dups = [v for v in dup_groups.values() if len(v) > 1]
+    n_dup = sum(len(v) for v in dups)
+
+    susp_pnl = sum(float(t["pnl_pct"]) for t in trades
+                   if any(s["entry_time"] == t.get("entry_time") for s in susp))
+    # ไม้น่าสงสัยที่เคยวิ่งถึง ~2R = น่าจะได้ TP จริงถ้าไม่ถูกตัดกลางทาง
+    would_be_tp = sum(1 for s in susp if s["mfe_r"] >= 1.9)
+    return {
+        "checked": len(trades),
+        "suspicious": len(susp),
+        "suspicious_pct": round(len(susp) / len(trades) * 100, 1),
+        "duplicate_exit_price": n_dup,
+        "suspicious_pnl_pct": round(susp_pnl * 100, 2),
+        "suspicious_reached_2r": would_be_tp,
+        "worst": sorted(susp, key=lambda s: -s["off_r"])[:5],
+    }
+
+
 def data_quality(records: list, trades: list) -> dict:
     """
     เช็คความน่าเชื่อของข้อมูลก่อนเอาไปสรุป
@@ -290,6 +337,7 @@ def analyze(records: list) -> dict:
             "ชั่วโมงที่เข้า (เวลา server)",
         ),
         "exit_whatif": exit_management_whatif(trades),
+        "exit_integrity": exit_integrity(trades),
         "eras": [],
     }
 
@@ -342,6 +390,17 @@ def format_report(a: dict) -> str:
     L.append(f"  Sharpe          {m['sharpe']:.2f}")
     L.append(f"  Avg win/loss    {m['avg_win']*100:+.2f}% / {m['avg_loss']*100:+.2f}%")
     L.append(f"  แพ้ติดกันสูงสุด  {m['max_consecutive_losses']} ไม้")
+
+    ei = a.get("exit_integrity") or {}
+    if ei.get("suspicious"):
+        L.append("")
+        L.append("── ⚠️  ความน่าเชื่อของ exit price ────────────────────────────")
+        L.append(f"  ไม้ที่ exit ไม่ตรงทั้ง SL และ TP: {ei['suspicious']}/{ei['checked']} "
+                 f"({ei['suspicious_pct']:.0f}%)")
+        L.append(f"  ไม้ที่ exit price ซ้ำกับไม้อื่น (หยิบ fill ผิดตัว): {ei['duplicate_exit_price']}")
+        L.append(f"  ในกลุ่มนี้เคยวิ่งถึง ~2R (น่าจะได้ TP ถ้าไม่ถูกตัด): {ei['suspicious_reached_2r']} ไม้")
+        L.append(f"  → PnL ที่บันทึกของกลุ่มนี้ ({ei['suspicious_pnl_pct']:+.2f}%) เชื่อไม่ได้ "
+                 f"และมักตัดไม้กำไรทิ้ง → ตัวเลขรวมแย่กว่าความจริง")
 
     L.append("")
     L.append("── MFE/MAE (ตั้ง SL/TP เหมาะไหม) ──────────────────────────────")
