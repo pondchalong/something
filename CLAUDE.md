@@ -26,7 +26,9 @@
 เครื่องมือวิเคราะห์ + แจ้งเตือนสัญญาณเทรด crypto (BTC/USDT) แบบ realtime
 รันบน cloud 24/7 เปิดดูจากมือถือได้ ส่ง alert ผ่าน Telegram
 
-**สถานะปัจจุบัน: Phase 1 เสร็จ + deploy แล้ว · Phase 2 โครงสร้างเสร็จ (รอ testnet key + deploy)**
+**สถานะปัจจุบัน (26 ก.ค. 2026): Phase 1 เสร็จ + deploy · Phase 2 รัน live demo บน testnet จริงมาแล้ว ~7 สัปดาห์ (93 ไม้)**
+→ แต่เพิ่งพบว่า **execution มีบั๊กทำให้ exit price เพี้ยน ~50% ของไม้** (แก้แล้ว 26 ก.ค.) ทำให้ข้อมูล 93 ไม้แรก **ใช้วัดผล strategy ไม่ได้** ต้องเก็บใหม่
+→ **อ่าน "Roadmap — งานที่ต้องทำต่อ" ท้ายไฟล์ก่อนเริ่มงาน**
 
 ### Requirements
 
@@ -359,17 +361,50 @@ py -3.12 test_reconcile.py
 
 ---
 
-## Roadmap — Phase 2
+## Roadmap — งานที่ต้องทำต่อ
 
-**เสร็จแล้ว (โครงสร้าง):**
-- ✅ Custom backtest engine + metrics (reuse generate_signal)
-- ✅ Optuna optimizer + train/test split (กัน overfit)
-- ✅ Demo executor บน Binance testnet (DRY_RUN guard, risk-based sizing)
-- ✅ Dashboard: Backtest / Optimizer / Demo Trades + Apply (manual approve)
+**เสร็จแล้ว:**
+- ✅ Backtest engine + metrics + Optuna optimizer (train/test split)
+- ✅ Executor บน Binance testnet + live_demo deploy บน Railway (เทรดจริงมา 7 สัปดาห์)
+- ✅ Dashboard: Backtest / Optimizer / Demo Trades + วิเคราะห์เชิงลึก
+- ✅ trade_stats (forward validation) + reconcile (เทียบกับ fill จริง)
+- ✅ แก้บั๊ก exit price / phantom close / order ค้าง (26 ก.ค.)
 
-**เหลือ:**
-- ⏳ user สมัคร Binance testnet + ขอ API key → ตั้ง env vars
-- ⏳ ทดสอบ order จริงบน testnet (DRY_RUN=false) 1 ไม้
-- ⏳ deploy live_demo บน Railway (เพิ่ม start option หรือแยก service)
-- ⏳ optimize trials เยอะ (100+) หา params ที่ robust (test ยัง positive)
-- 🔮 อนาคต: RL discover strategy ใหม่, walk-forward optimization, slippage model
+**ทำต่อ — เรียงตามลำดับ ห้ามข้าม:**
+1. ⏳ **merge branch แก้บั๊กเข้า branch ที่ Railway ผูกไว้ → redeploy** — ถ้าไม่ทำ production ยังรันโค้ดที่มีบั๊กอยู่ ข้อมูลใหม่ก็เชื่อไม่ได้เหมือนเดิม
+2. ⏳ **`py -3.12 -m analysis.reconcile --days 60`** — เทียบ log เก่ากับ fill จริง จะได้รู้ว่า 93 ไม้แรกขาดทุนจริงเท่าไหร่ (log บอก -17.85% แต่คาดว่าของจริงดีกว่านั้น เพราะบั๊กตัดไม้กำไรทิ้ง)
+3. ⏳ **เก็บข้อมูลใหม่ ≥50 ไม้** ด้วย execution ที่แก้แล้ว — ระหว่างนี้เช็คว่าไม่มี `exit_reason: "other"` โผล่ถี่ๆ และไม่มี record `exit_unreliable`
+4. ⏳ **re-validate:** `py -3.12 -m analysis.trade_stats` เทียบกับ backtest → ตัดสินว่า strategy มี edge จริงไหม
+5. ⏳ **ค่อย optimize params** (`py -3.12 -m backtest.optimizer --trials 100`) — **ห้ามทำก่อนข้อ 3–4** ไม่งั้นได้ params ที่ fit กับบั๊ก
+6. 🔮 อนาคต: walk-forward optimization, slippage model, RL discover strategy ใหม่
+
+**⚠️ งานที่ต้องรันบนเครื่อง local เท่านั้น** (Claude Code บน web ทำไม่ได้ — egress proxy บล็อก host นอก allowlist):
+- `analysis.reconcile` (ต่อ Binance API)
+- `backtest.engine` / `backtest.optimizer` / dashboard หน้า Live Signal (ต้อง fetch OHLCV)
+- ที่รันได้ทุกที่ (offline ล้วน): `analysis.trade_stats`, test ทั้ง 4 ไฟล์
+
+---
+
+## เริ่มงานต่อบนเครื่อง local
+
+```powershell
+# 1. ดึง branch ที่มีงานล่าสุด
+git fetch origin claude/trading-strategy-stats-wq7k9k
+git checkout claude/trading-strategy-stats-wq7k9k
+
+# 2. ตั้งค่า (ครั้งแรกเท่านั้น)
+py -3.12 -m pip install -r requirements.txt
+copy .env.example .env        # แล้วใส่ TELEGRAM_* + BINANCE_TESTNET_* ให้ครบ
+
+# 3. เช็คว่าทุกอย่างพร้อม (offline ทั้งหมด ควรผ่าน 38/38)
+py -3.12 test_trade_stats.py
+py -3.12 test_executor_exit.py
+py -3.12 test_live_demo_loop.py
+py -3.12 test_reconcile.py
+
+# 4. งานแรกที่ควรทำ (ดู Roadmap ข้อ 2)
+py -3.12 -m analysis.reconcile --days 60
+```
+
+**ไฟล์ข้อมูลที่ไม่ได้อยู่ใน git** (gitignored — ต้องดึงจาก Railway เอง): `trade_log.json`, `open_trade.json`
+→ ดึงผ่าน dashboard → Demo Trades → Export CSV (ดู Known Issues "ดึง trade_log ออกจาก Railway")
