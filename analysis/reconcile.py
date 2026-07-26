@@ -21,6 +21,9 @@ from datetime import datetime
 # ระยะเวลาที่ยอมให้ entry ของ log กับ fill จริงห่างกันแล้วยังถือว่าเป็นไม้เดียวกัน
 MATCH_WINDOW_MS = 10 * 60 * 1000
 PAGE = 1000
+# Binance futures /fapi/v1/userTrades: ช่วง startTime→endTime ห้ามเกิน 7 วัน
+# (ถ้าส่ง startTime เฉยๆ จะได้แค่ 7 วันแรกนับจากนั้น แล้วเงียบ) → ต้องไล่ทีละหน้าต่าง
+FETCH_WINDOW_MS = 7 * 86400 * 1000 - 60_000
 
 
 # ============================================================
@@ -46,28 +49,41 @@ def normalize_fill(raw: dict) -> dict:
         "realized_pnl": _f(info.get("realizedPnl")),
         "commission": _f(info.get("commission")),
         "order_id": str(raw.get("order") or info.get("orderId") or ""),
+        # trade id — order เดียวแตกเป็นหลาย fill ที่ราคา/ขนาด/เวลาเท่ากันเป๊ะได้
+        # ถ้า dedupe โดยไม่ใช้ id จะทิ้ง fill จริงทิ้ง → position ไม่มีวันกลับเป็น 0
+        "trade_id": str(raw.get("id") or info.get("id") or ""),
     }
 
 
-def fetch_fills(ex, symbol: str, since_ms: int) -> list:
-    """ดึง fill ทั้งหมดตั้งแต่ since_ms (paginate — Binance คืนสูงสุด 1000/ครั้ง)"""
-    out, cursor, seen = [], since_ms, set()
-    while True:
-        batch = ex.fetch_my_trades(symbol, since=cursor, limit=PAGE)
-        if not batch:
-            break
-        fresh = 0
-        for raw in batch:
+def fetch_fills(ex, symbol: str, since_ms: int, until_ms: int = None) -> list:
+    """
+    ดึง fill ทั้งหมดในช่วง [since_ms, until_ms]
+
+    ต้อง paginate 2 ชั้น:
+    - ชั้นนอก: ไล่ทีละหน้าต่าง 7 วัน (ข้อจำกัดของ Binance — ดู FETCH_WINDOW_MS)
+    - ชั้นใน: ถ้าหน้าต่างไหนมี fill เกิน 1000 → เลื่อน cursor ตาม fill ตัวท้าย
+    """
+    until = int(until_ms if until_ms is not None else time.time() * 1000)
+    out, cursor, seen = [], int(since_ms), set()
+    while cursor <= until:
+        end = min(cursor + FETCH_WINDOW_MS, until)
+        batch = ex.fetch_my_trades(symbol, since=cursor, limit=PAGE,
+                                   params={"endTime": end})
+        for raw in batch or []:
             f = normalize_fill(raw)
-            key = (f["order_id"], f["ts"], f["price"], f["qty"])
+            key = f["trade_id"] or (f["order_id"], f["ts"], f["price"], f["qty"])
             if key in seen:
                 continue
             seen.add(key)
             out.append(f)
-            fresh += 1
-        if fresh == 0 or len(batch) < PAGE:
-            break
-        cursor = max(f["ts"] for f in out) + 1
+        # หน้าเต็ม = ยังมี fill เหลือในหน้าต่างนี้ → ขยับ cursor ไปหลัง fill ตัวท้าย
+        # (ไม่เต็ม = หมดหน้าต่างนี้แล้ว → กระโดดไปหน้าต่างถัดไป)
+        nxt = end + 1
+        if batch and len(batch) >= PAGE:
+            last = max(int(r.get("timestamp") or 0) for r in batch) + 1
+            if last > cursor:
+                nxt = min(last, end + 1)
+        cursor = nxt
     out.sort(key=lambda f: f["ts"])
     return out
 

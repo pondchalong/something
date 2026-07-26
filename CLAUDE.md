@@ -26,8 +26,9 @@
 เครื่องมือวิเคราะห์ + แจ้งเตือนสัญญาณเทรด crypto (BTC/USDT) แบบ realtime
 รันบน cloud 24/7 เปิดดูจากมือถือได้ ส่ง alert ผ่าน Telegram
 
-**สถานะปัจจุบัน (26 ก.ค. 2026): Phase 1 เสร็จ + deploy · Phase 2 รัน live demo บน testnet จริงมาแล้ว ~7 สัปดาห์ (93 ไม้)**
-→ แต่เพิ่งพบว่า **execution มีบั๊กทำให้ exit price เพี้ยน ~50% ของไม้** (แก้แล้ว 26 ก.ค.) ทำให้ข้อมูล 93 ไม้แรก **ใช้วัดผล strategy ไม่ได้** ต้องเก็บใหม่
+**สถานะปัจจุบัน (26 ก.ค. 2026): Phase 1 เสร็จ + deploy · Phase 2 รัน live demo บน testnet จริงมาแล้ว ~7 สัปดาห์ (log 93 ไม้ / จริง 123 ไม้)**
+→ **execution มีบั๊กทำให้ exit price เพี้ยน ~50% ของไม้** (แก้แล้ว 26 ก.ค.) ทำให้ข้อมูลชุดแรก **ใช้วัดผล strategy ไม่ได้** ต้องเก็บใหม่
+→ **reconcile กับ fill จริงแล้ว (26 ก.ค.): ผลจริง -24.27% แย่กว่า log** และ**แม้ตัดไม้ที่เป็นบั๊กออกหมด gross ก็ยังติดลบ** = ยังไม่มีหลักฐานว่า strategy มี edge จริง (ดู "ผล reconcile รอบแรก")
 → **อ่าน "Roadmap — งานที่ต้องทำต่อ" ท้ายไฟล์ก่อนเริ่มงาน**
 
 ### Requirements
@@ -251,10 +252,36 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 
 **Reconcile — เทียบ log กับของจริง (analysis/reconcile.py):**
 - ดึง fill จริงจาก Binance API (`fetch_my_trades` + paginate) → ประกอบเป็นไม้เองด้วยการไล่ position สะสม (พอกลับมา 0 = ไม้ปิด) → **ไม่พึ่ง state ฝั่งเราซึ่งเป็นตัวที่เคยพัง**
+- **การดึงต้อง paginate 2 ชั้น** (แก้ 26 ก.ค. — รอบแรกดึงได้แค่ 14 fill/3 ไม้ จากของจริง 647 fill/123 ไม้): ชั้นนอกไล่ทีละ **หน้าต่าง 7 วัน** (Binance บังคับ ถ้าส่ง `startTime` เฉยๆ ได้แค่ 7 วันแรกแล้วเงียบ) · ชั้นในเลื่อน cursor ถ้าหน้าเต็ม 1000 · **dedupe ด้วย `trade_id` เท่านั้น** — order เดียวแตกเป็นหลาย fill ที่ ราคา/ขนาด/เวลา เท่ากันเป๊ะได้ ถ้า dedupe ด้วย key ประกอบจะทิ้ง fill จริง → position ไม่มีวันกลับเป็น 0 → ไม้ทั้งหมดถูกเหมารวมเป็นก้อนเดียว
 - ใช้ `realizedPnl` + `commission` ที่ Binance ส่งมากับแต่ละ fill = **ground truth** ที่บั๊กฝั่งเราแตะไม่ได้
 - จับคู่กับ `trade_log.json` ด้วยเวลาเปิดไม้ (±10 นาที) แล้วรายงาน: exit price ไม่ตรงกี่ไม้, PnL ไม่ตรงกี่ไม้, **ไม้ผี** (log มีแต่ exchange ไม่มี = บั๊ก query position), **ไม้ที่ bot พลาดไม่บันทึก**, และ PnL รวมสองฝั่งต่างกันกี่จุด
 - `--dump fills.json` เก็บ fill ดิบไว้วิเคราะห์ offline ทีหลัง · `--file fills.json` อ่านจากไฟล์ ไม่ต้องต่อ network (ใช้ตอน environment บล็อก exchange API)
-- test: `py -3.12 test_reconcile.py` (11 เคส, offline)
+- test: `py -3.12 test_reconcile.py` (16 เคส, offline — รวม fake exchange ที่จำลองข้อจำกัด 7 วัน + fill ซ้ำของ order เดียว)
+
+**📊 ผล reconcile รอบแรก (26 ก.ค. 2026 — ground truth จาก Binance, 1 มิ.ย.–26 ก.ค., 123 ไม้ปิด):**
+
+| | ที่ bot บันทึก (93 ไม้) | **ของจริงจาก exchange (123 ไม้)** |
+|---|---|---|
+| ผลรวม | -17.85% | **-24.27% (-2,139.78 USDT)** |
+| winrate | 30% | **35%** |
+| PF | 0.34 | **0.40** |
+
+- ❌ **สมมติฐานเดิมผิด** — เคยคาดว่า "ของจริงน่าจะดีกว่า log เพราะบั๊กตัดไม้กำไรทิ้ง" แต่**ของจริงแย่กว่า** (log ตกไป 30 ไม้ที่ bot ไม่ได้บันทึกเลย ซึ่งส่วนใหญ่เป็นไม้ขาดทุน)
+- 💸 **ค่าธรรมเนียมคือครึ่งหนึ่งของการขาดทุน:** gross -1,040 USDT · fee **-1,099 USDT** → net -2,140. fee = 0.08% ของ notional ต่อไม้ (เข้า+ออก) ≈ **8.94 USDT/ไม้** เทียบกับไม้แพ้เฉลี่ย -44.84 → **fee ≈ 0.2R ต่อไม้**
+- 🐛 **15 ไม้ "เปิดแล้วปิดทันทีใน <2 นาที" = -639 USDT (winrate 0%)** — คือ path "ตั้ง SL/TP ไม่ได้ (-2021) → ปิด position กันเปลือย" ของ executor. **หยุดหลัง 22 มิ.ย.** (ตรงกับตอนแก้ให้ recompute SL/TP จาก entry จริง) → ยืนยันว่าแก้ถูกจุด
+- 📉 **เทียบต่อไม้กับ backtest (ตัวเลขสำคัญสุด):**
+
+| ชุดข้อมูล | gross/ไม้ | fee/ไม้ | net/ไม้ |
+|---|---|---|---|
+| backtest (+9%, 74 ไม้) | ~+0.20% | -0.08% | **+0.12%** |
+| จริง ทั้งหมด 123 ไม้ | -0.076% | -0.08% | -0.156% |
+| จริง ตัดไม้บั๊ก 108 ไม้ | -0.043% | -0.08% | -0.123% |
+| จริง เฉพาะ ก.ค. 40 ไม้ | **-0.020%** | -0.08% | -0.100% |
+
+  → **แม้ตัดบั๊กออกหมด gross ก็ยังติดลบ** (backtest คาด +0.20%, จริง -0.02%) = edge ที่เห็นใน backtest **ไม่ปรากฏในการเทรดจริง** ส่วนต่างนี้คือ slippage ของ market order + สภาพตลาดจริง ซึ่ง backtest ไม่ได้จำลอง
+  → edge ที่ backtest อ้าง (+0.12%/ไม้) บางกว่า fee (0.08%) แค่ 1.5 เท่า → **ความคลาดเคลื่อนนิดเดียวก็พลิกเป็นขาดทุน**
+- 🔑 **fee ต่อ R ขึ้นกับระยะ SL:** `fee_R ≈ 0.0008 / (ระยะ SL เป็นสัดส่วนของราคา)` — SL แคบ (15m ATR) → size ใหญ่ → fee กิน R เยอะ. อยากลด fee ต่อ R ต้อง **SL กว้างขึ้น / TF สูงขึ้น / เทรดถี่น้อยลง** (เอาไปเป็นทิศทางตอน optimize รอบหน้า)
+- ⚠️ **ยังทำไม่ครบ:** เทียบ exit price รายไม้ (log vs จริง) ยังทำไม่ได้ เพราะ `trade_log.json` บนเครื่อง local มีแค่ 2 record เก่า — ต้อง export CSV/JSON จาก Railway มาก่อนแล้วรัน `--log <path>`
 
 **Self-learning scope:** ตอนนี้ = optimize params ของ strategy ปัจจุบัน (ยังไม่ใช่ RL discover strategy ใหม่)
 
@@ -355,6 +382,7 @@ py -3.12 test_reconcile.py
   - **ที่แก้:** `get_open_position()` raise `PositionQueryError` แทนคืน None (live_demo เจอ → ข้ามรอบ ไม่แตะไม้) · `_find_exit_fill()` กรอง fill ด้วย `entry_ms` (epoch ms ที่บันทึกตอนเปิดไม้) → หยิบเฉพาะ fill ที่เกิดหลังเปิดไม้ + VWAP ถ้าแตกหลาย fill · หา exit ไม่เจอ → บันทึก `exit_unreliable=True` **ไม่มี `pnl_pct`** (ไม่ปนในสถิติ) แทนการเดาราคา · `cancel_open_orders()` ทุกครั้งที่ไม้ปิด · `exit_reason` ใหม่มีค่า **`other`** = ปิดกลางทาง (ไม่ใช่ SL/TP) + field `exit_off_r` บอกว่าห่างจาก SL/TP กี่ R
   - ตรวจได้ด้วย `py -3.12 -m analysis.trade_stats` (section "ความน่าเชื่อของ exit price") หรือ dashboard → Demo Trades
   - 📌 **ข้อมูลใหม่หลังแก้ต้องเก็บใหม่ทั้งหมด** — อย่าเอาไม้ก่อน 26 ก.ค. มารวมวัดผล
+- **`fetch_my_trades` ของ Binance futures ได้ข้อมูลไม่ครบแบบเงียบๆ (แก้แล้ว 26 ก.ค. 2026):** `/fapi/v1/userTrades` จำกัดช่วง `startTime`→`endTime` **ไม่เกิน 7 วัน** — ส่ง `since` ย้อนหลัง 60 วันไปเฉยๆ จะได้แค่ 7 วันแรก **ไม่ error ไม่เตือน** (ครั้งแรกได้ 14 fill จากของจริง 647). และห้าม dedupe fill ด้วย (orderId, เวลา, ราคา, ขนาด) — order เดียวแตกเป็นหลาย fill ที่ค่าเหล่านี้เท่ากันเป๊ะได้ ต้องใช้ **trade id** ไม่งั้น fill จริงหาย → ไล่ position แล้วไม่กลับเป็น 0 → 647 fill ประกอบได้แค่ 7 ไม้แทนที่จะเป็น 123. ทั้งสองจุดแก้ใน `fetch_fills()` แล้ว (`FETCH_WINDOW_MS` + dedupe ด้วย `trade_id`)
 - **Railway auto-deploy:** ถ้า deploy ค้าง commit เก่า → เช็ค Auto Deploy ON + branch ที่ผูก, trigger redeploy manual
 - **ดึง trade_log ออกจาก Railway:** filesystem ของ Railway เข้าจากข้างนอกตรงๆ ไม่ได้ → ใช้ dashboard → Demo Trades → **Export CSV** (หรือ Railway CLI: `railway run cat /data/trade_log.json > demo.json`) แล้ววิเคราะห์ด้วย `py -3.12 -m analysis.trade_stats --file demo.csv`
 - **Claude Code (web) เข้า exchange API / Railway URL ไม่ได้:** environment มี egress proxy ที่บล็อก host นอก allowlist → `curl`/ccxt ได้ **403 CONNECT tunnel failed** (ไม่ใช่ geo-block ของ exchange, และ retry ไม่ช่วย). ผลคือรัน backtest/optimizer ที่ต้อง fetch OHLCV ไม่ได้ใน session นั้น → ใช้ `analysis/trade_stats.py` (offline) วิเคราะห์จากไฟล์แทน, หรือแก้ network policy ของ environment ให้ผ่าน `api.binance.com` ฯลฯ
@@ -372,10 +400,10 @@ py -3.12 test_reconcile.py
 
 **ทำต่อ — เรียงตามลำดับ ห้ามข้าม:**
 1. ⏳ **merge branch แก้บั๊กเข้า branch ที่ Railway ผูกไว้ → redeploy** — ถ้าไม่ทำ production ยังรันโค้ดที่มีบั๊กอยู่ ข้อมูลใหม่ก็เชื่อไม่ได้เหมือนเดิม
-2. ⏳ **`py -3.12 -m analysis.reconcile --days 60`** — เทียบ log เก่ากับ fill จริง จะได้รู้ว่า 93 ไม้แรกขาดทุนจริงเท่าไหร่ (log บอก -17.85% แต่คาดว่าของจริงดีกว่านั้น เพราะบั๊กตัดไม้กำไรทิ้ง)
-3. ⏳ **เก็บข้อมูลใหม่ ≥50 ไม้** ด้วย execution ที่แก้แล้ว — ระหว่างนี้เช็คว่าไม่มี `exit_reason: "other"` โผล่ถี่ๆ และไม่มี record `exit_unreliable`
-4. ⏳ **re-validate:** `py -3.12 -m analysis.trade_stats` เทียบกับ backtest → ตัดสินว่า strategy มี edge จริงไหม
-5. ⏳ **ค่อย optimize params** (`py -3.12 -m backtest.optimizer --trials 100`) — **ห้ามทำก่อนข้อ 3–4** ไม่งั้นได้ params ที่ fit กับบั๊ก
+2. ✅ **reconcile กับ fill จริง (ทำแล้ว 26 ก.ค.)** — ของจริง **-24.27% / 123 ไม้** (แย่กว่า log ที่ -17.85%) ดูตาราง "ผล reconcile รอบแรก" ด้านบน. เหลือส่วนเดียว: export `trade_log.json` จาก Railway มาเทียบ exit price รายไม้ (`--log <path>`)
+3. ⏳ **เก็บข้อมูลใหม่ ≥50 ไม้** ด้วย execution ที่แก้แล้ว — ระหว่างนี้เช็คว่าไม่มี `exit_reason: "other"` โผล่ถี่ๆ, ไม่มี record `exit_unreliable` และ**ไม่มีไม้ที่ปิดภายใน <2 นาที**
+4. ⏳ **re-validate:** `py -3.12 -m analysis.trade_stats` + `reconcile` เทียบกับ backtest → ตัดสินว่า strategy มี edge จริงไหม. **เกณฑ์ที่ต้องผ่าน: gross/ไม้ > +0.08%** (ไม่งั้นค่า fee กินหมด) — ข้อมูลชุดเก่าอยู่ที่ -0.02%
+5. ⏳ **ค่อย optimize params** (`py -3.12 -m backtest.optimizer --trials 100`) — **ห้ามทำก่อนข้อ 3–4**. ทิศทางจาก reconcile: ดัน **fee ต่อ R ให้ต่ำลง** (SL กว้างขึ้น / TF สูงขึ้น / เทรดถี่น้อยลง) และใส่ **slippage** เข้า model ก่อนเชื่อผล
 6. 🔮 อนาคต: walk-forward optimization, slippage model, RL discover strategy ใหม่
 
 **⚠️ งานที่ต้องรันบนเครื่อง local เท่านั้น** (Claude Code บน web ทำไม่ได้ — egress proxy บล็อก host นอก allowlist):
