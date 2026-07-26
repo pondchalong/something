@@ -17,6 +17,7 @@ from strategy.params import load_active, save_active, StrategyParams
 from backtest.engine import run_backtest
 from backtest.results import save_result, load_result, load_candidate
 from trading.executor import load_trade_log, load_open_trade, TRADE_LOG
+from analysis.trade_stats import analyze as analyze_trades
 
 st.set_page_config(page_title="Trade Signal Dashboard", page_icon="📈", layout="wide")
 st.title("📈 Trade Signal Dashboard")
@@ -206,6 +207,73 @@ def render_demo():
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Export CSV (ทุก field)", csv,
                        file_name="demo_trades.csv", mime="text/csv")
+
+    # --- Deep analysis (forward validation: metrics ชุดเดียวกับ backtest) ---
+    st.divider()
+    st.subheader("🔍 วิเคราะห์เชิงลึก")
+    a = analyze_trades(log)
+    m = a["overall"]
+
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("Profit Factor", f"{m['profit_factor']:.2f}",
+              help="กำไรรวม ÷ ขาดทุนรวม · >1 = มี edge")
+    d2.metric("Expectancy/ไม้", f"{m['expectancy']*100:+.3f}%",
+              help="กำไรคาดหวังต่อ 1 ไม้ · บวก = ยิ่งเทรดยิ่งได้")
+    d3.metric("Max Drawdown", f"{m['max_drawdown']*100:.2f}%")
+    d4.metric("Sharpe", f"{m['sharpe']:.2f}")
+    st.caption(f"avg {a['avg_r']:+.2f}R ต่อไม้ · แพ้ติดกันสูงสุด {m['max_consecutive_losses']} ไม้ "
+               f"· metrics ชุดเดียวกับ backtest → เทียบกันได้ตรงๆ")
+
+    ei = a.get("exit_integrity") or {}
+    if ei.get("suspicious"):
+        st.error(
+            f"🚨 **exit price เชื่อไม่ได้ {ei['suspicious']}/{ei['checked']} ไม้ "
+            f"({ei['suspicious_pct']:.0f}%)** — ไม้ควรจบที่ SL หรือ TP เท่านั้น แต่กลุ่มนี้ปิดที่ราคาอื่น "
+            f"(ซ้ำกับไม้อื่น {ei['duplicate_exit_price']} ไม้). "
+            f"ในกลุ่มนี้เคยวิ่งถึง ~2R แล้วถูกตัดทิ้ง {ei['suspicious_reached_2r']} ไม้ "
+            f"→ สถิติรวมแย่กว่าความจริง **อย่าเพิ่งใช้ตัวเลขนี้ตัดสิน strategy หรือ optimize params**"
+        )
+
+    q = a["quality"]
+    if q["exit_equals_entry"]:
+        st.warning(f"⚠️ {q['exit_equals_entry']} ไม้มี exit = entry (ดึงราคาปิดจาก testnet ไม่ได้ "
+                   f"ตอนบันทึก) → ถูกนับเป็นแพ้ค่า fee ทั้งที่ผลจริงไม่ทราบ")
+
+    # แยกตามชุด params ที่ live ตอนนั้น (ดึงจาก git history ของ active_params.json)
+    if a["eras"]:
+        st.markdown("**แยกตามชุด params ที่รันอยู่ตอนนั้น** "
+                    "— ไม้เก่าที่รัน params คนละชุด ไม่ควรเอามาตัดสิน strategy ปัจจุบัน")
+        st.dataframe(pd.DataFrame([{
+            "ตั้งแต่": str(e["since"])[:10],
+            "params": e["subject"],
+            "macd_only": e["filters"].get("macd_only"),
+            "skip_high_vol": e["filters"].get("skip_high_vol"),
+            "ไม้": e["metrics"]["num_trades"],
+            "win%": e["metrics"]["winrate"],
+            "return%": round(e["metrics"]["total_return"] * 100, 2),
+            "PF": e["metrics"]["profit_factor"],
+        } for e in a["eras"]]), width="stretch", hide_index=True)
+
+    # กลุ่มไหนกินกำไร / กลุ่มไหนกินทุน
+    for key in ("by_direction", "by_confluence", "by_hour"):
+        b = a[key]
+        if not b["groups"]:
+            continue
+        with st.expander(f"แยกตาม {b['label']}"):
+            st.dataframe(pd.DataFrame([
+                {"กลุ่ม": k, "ไม้": v["trades"], "win%": v["winrate"],
+                 "รวม PnL%": v["total_pnl_pct"], "avg R": v["avg_r"]}
+                for k, v in sorted(b["groups"].items(), key=lambda kv: -kv[1]["total_pnl_pct"])
+            ]), width="stretch", hide_index=True)
+
+    w = a["exit_whatif"]
+    if w:
+        with st.expander("BE / trailing stop จะช่วยไหม (ประมาณการขอบบน)"):
+            st.write(f"- ไม้แพ้ที่เคยกำไรถึง 1R: **{w['loss_reached_1r']}/{w['losses']}**")
+            st.write(f"- ไม้แพ้ที่เคยกำไรถึง 0.5R: **{w['loss_reached_0.5r']}/{w['losses']}**")
+            st.write(f"- ไม้ชนะที่เคยลบลึก ≥70% ของ SL: **{w['wins_with_deep_mae']}/{w['wins']}** "
+                     f"(BE ที่ตั้งเร็วไปจะตัดกลุ่มนี้ทิ้ง)")
+            st.caption(w["note"])
 
 
 # Dispatch Phase 2 pages (Live Signal = code ด้านล่าง)
