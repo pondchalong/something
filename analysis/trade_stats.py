@@ -298,6 +298,8 @@ def data_quality(records: list, trades: list) -> dict:
     แล้ว fallback เป็น entry → ไม้นั้นถูกบันทึกเป็น "แพ้ค่า fee" ทั้งที่ผลจริงไม่รู้
     """
     dry = sum(1 for r in records if str(r.get("mode", "")).upper() == "DRY_RUN")
+    # executor mark ไว้เองเมื่อหา exit fill ไม่เจอ → ไม่มี pnl_pct จึงไม่ปนในสถิติอยู่แล้ว
+    unreliable = sum(1 for r in records if r.get("exit_unreliable"))
     suspicious = [t for t in trades
                   if t.get("exit") is not None and float(t["exit"]) == float(t["entry"])]
     missing_excursion = [t for t in trades if t.get("mfe_pct") is None or t.get("mae_pct") is None]
@@ -305,6 +307,7 @@ def data_quality(records: list, trades: list) -> dict:
         "total_records": len(records),
         "closed_trades": len(trades),
         "dry_run_records": dry,
+        "exit_unreliable_records": unreliable,
         "exit_equals_entry": len(suspicious),
         "missing_mfe_mae": len(missing_excursion),
     }

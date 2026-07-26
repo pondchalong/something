@@ -17,6 +17,7 @@ from trading.executor import (
     execute_signal, get_open_position, close_position, add_to_position,
     load_open_trade, save_open_trade, clear_open_trade,
     new_open_trade, update_excursion, record_closed_trade,
+    cancel_open_orders, PositionQueryError,
 )
 import os
 from strategy.params import load_active, ACTIVE_PATH
@@ -75,7 +76,14 @@ def run():
 
             # --- REAL mode: track lifecycle ---
             open_trade = load_open_trade()
-            has_pos = get_open_position(ex, SYMBOL) is not None
+            try:
+                has_pos = get_open_position(ex, SYMBOL) is not None
+            except PositionQueryError as e:
+                # query พลาดชั่วคราว ≠ ไม้ปิดแล้ว — ข้ามรอบนี้ไปเฉยๆ
+                # (เดิมโค้ดนี้ได้ None แล้วเข้าใจว่าไม้ปิด → บันทึกผลผิด + ปิดไม้ที่ยังดีทิ้ง)
+                logger.warning(f"เช็ค position ไม่ได้ ({str(e)[:50]}) — ข้ามรอบนี้ ไม่แตะไม้ที่ถืออยู่")
+                time.sleep(POLL_INTERVAL)
+                continue
 
             if open_trade and has_pos:
                 # ถือไม้อยู่ → update MFE/MAE
@@ -131,6 +139,9 @@ def run():
                 # ไม้ปิดแล้ว (SL/TP โดน) → บันทึก outcome + แจ้งผล
                 closed = record_closed_trade(ex, open_trade)
                 clear_open_trade()
+                # ล้าง SL/TP ฝั่งที่ยังไม่ทำงาน — ถ้าปล่อยค้าง มันจะไปปิดไม้ถัดไป
+                # ที่ราคาไม่เกี่ยวข้อง (สาเหตุนึงที่ exit price เพี้ยนครึ่งนึงของไม้)
+                cancel_open_orders(ex, SYMBOL)
                 send_closed_alert(closed)
 
             elif has_pos and not open_trade:

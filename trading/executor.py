@@ -23,11 +23,23 @@ os.makedirs(_LOG_DIR, exist_ok=True)
 TRADE_LOG = os.path.join(_LOG_DIR, "trade_log.json")     # closed trades (มี outcome)
 OPEN_TRADE = os.path.join(_LOG_DIR, "open_trade.json")   # ไม้ที่กำลังถือ (track MFE/MAE)
 FEE = 0.0004  # 0.04% taker
+# exit ห่างจาก SL/TP เกินกี่ R ถึงถือว่า "ไม่ได้จบที่ SL/TP" (เผื่อ slippage ปกติ)
+_EXIT_TOL_R = 0.15
 
 # Binance testnet ไม่เสถียร (502/timeout บ่อย) → retry transient errors
 _TRANSIENT_KW = ("502", "503", "-1007", "timeout", "bad gateway", "backend", "temporarily")
 # rate limit / IP ban (418 teapot, 429, -1003) → ห้าม retry: ยิ่ง retry ยิ่งโดนแบนนานขึ้น
 _RATELIMIT_KW = ("-1003", "418", "429", "too many request", "ip banned", "way too many")
+
+
+class PositionQueryError(RuntimeError):
+    """
+    query position ไม่สำเร็จ — **คนละเรื่องกับ "ไม่มี position"**
+
+    เดิม get_open_position() คืน None ทั้งสองกรณี → caller เข้าใจผิดว่าไม้ปิดแล้ว
+    ทั้งที่แค่ testnet ตอบไม่ได้ชั่วคราว → บันทึกไม้ปิดผิด + ปิดไม้ที่ยังดีอยู่ทิ้ง
+    (ดู CLAUDE.md "exit price ที่บันทึกเชื่อไม่ได้")
+    """
 
 
 def _is_transient(e) -> bool:
@@ -80,19 +92,29 @@ def _cancel_all(ex, symbol=SYMBOL):
             logger.warning(f"cancel orders {params or 'regular'}: {str(e)[:40]}")
 
 
+def cancel_open_orders(ex, symbol=SYMBOL):
+    """
+    ล้าง order ที่ค้างทั้งหมด — ต้องเรียก **ทุกครั้งที่ไม้ปิด**
+
+    Binance ไม่ได้ยกเลิก SL/TP ฝั่งที่เหลือให้อัตโนมัติเสมอ: พอ SL ทำงาน order TP
+    ของไม้นั้นอาจค้างอยู่ แล้วไปปิดไม้ถัดไปที่ราคาซึ่งไม่เกี่ยวกับไม้นั้นเลย
+    """
+    _cancel_all(ex, symbol)
+
+
 def get_open_position(ex, symbol=SYMBOL):
     """
-    คืน position ที่เปิดอยู่ (ถ้ามี) — None ถ้าไม่มี
+    คืน position ที่เปิดอยู่ — **None = ยืนยันแล้วว่าไม่มี position จริงๆ**
 
-    retry transient errors ก่อนยอมแพ้: testnet /fapi/v3/positionRisk 502/timeout บ่อย
-    ถ้าไม่ retry → คืน None ทั้งที่ query แค่พลาดชั่วคราว → caller เข้าใจผิดว่า "ไม่มี
-    position" (live_demo อาจบันทึกไม้ปิดทั้งที่ยังถืออยู่ / เปิดไม้ซ้ำ)
+    query ไม่สำเร็จ → raise PositionQueryError (ไม่คืน None) เพราะ "ไม่รู้" กับ
+    "ไม่มี" ต้องแยกกัน: testnet /fapi/v3/positionRisk 502/timeout บ่อย ถ้าคืน None
+    เวลา query พลาด caller จะเข้าใจว่าไม้ปิดแล้ว → บันทึกผลผิด + ปิดไม้ที่ยังดีทิ้ง
     """
     try:
         positions = _retry(lambda: ex.fetch_positions([symbol]))
     except Exception as e:
         logger.warning(f"fetch_positions ไม่ได้ (หลัง retry): {str(e)[:80]}")
-        return None
+        raise PositionQueryError(str(e)[:120]) from e
     for p in positions:
         contracts = float(p.get("contracts") or 0)
         if abs(contracts) > 0:
@@ -145,14 +167,26 @@ def execute_signal(signal: dict, symbol=SYMBOL) -> dict:
         _retry(lambda: ex.create_order(symbol, "market", side, size))
     except Exception as e:
         time.sleep(1)
-        if not get_open_position(ex, symbol):
+        try:
+            opened = get_open_position(ex, symbol)
+        except PositionQueryError:
+            # ไม่รู้ว่า entry ติดไหม → ห้ามเดา. ถ้าติดจริง รอบหน้า live_demo จะเจอ
+            # position ที่ไม่มี state = orphan แล้วปิดให้เอง (ปลอดภัยกว่าเดาว่าไม่ติด)
+            logger.error(f"entry error + verify ไม่ได้ — รอ orphan cleanup: {str(e)[:60]}")
+            return {"status": "failed", "reason": "entry_unverified"}
+        if not opened:
             logger.error(f"entry ไม่สำเร็จ (testnet down?): {str(e)[:80]}")
             return {"status": "failed", "reason": "entry_error"}
         logger.warning("entry timeout แต่ position เปิดจริง — ไปตั้ง SL/TP ต่อ")
 
     # ยืนยัน position เปิดจริง + ดึง entry จริงก่อนตั้ง SL/TP
     time.sleep(1)
-    pos = get_open_position(ex, symbol)
+    try:
+        pos = get_open_position(ex, symbol)
+    except PositionQueryError:
+        logger.error("verify position หลัง entry ไม่ได้ → ยังไม่ได้ตั้ง SL/TP! "
+                     "รอบหน้า orphan cleanup จะปิดให้")
+        return {"status": "failed", "reason": "verify_failed"}
     if not pos:
         logger.error("ไม่พบ position หลัง entry — ยกเลิก")
         return {"status": "failed", "reason": "no_position_after_entry"}
@@ -235,6 +269,8 @@ def new_open_trade(signal: dict, size=None, entry=None, sl=None, tp=None) -> dic
         "sl": sl if sl is not None else signal["sl"],
         "tp": tp if tp is not None else signal["tp"], "size": size, "n_levels": 1,
         "entry_time": datetime.now().isoformat(timespec="seconds"),
+        # epoch ms ตรงๆ — ใช้กรอง fill ตอนปิดไม้ ไม่ต้องเดา timezone ของ entry_time
+        "entry_ms": int(time.time() * 1000),
         "mfe_price": entry_price, "mae_price": entry_price,
         "confluence": signal.get("confluence"), "winrate_est": signal.get("winrate"),
     }
@@ -250,23 +286,69 @@ def update_excursion(t: dict, high: float, low: float):
         t["mae_price"] = max(t["mae_price"], high)
 
 
+def _find_exit_fill(ex, t: dict, symbol=SYMBOL):
+    """
+    หา fill ที่ปิดไม้นี้จริง — ต้องเป็น fill ฝั่งตรงข้ามที่เกิด **หลังเปิดไม้** เท่านั้น
+
+    เดิมหยิบ "fill ฝั่งตรงข้ามตัวล่าสุด" โดยไม่ดูเวลา → ถ้า fill ของไม้นี้ยังไม่ขึ้น
+    (testnet ช้า) หรือไม้ยังไม่ปิดจริง จะได้ fill ของ **ไม้ก่อนหน้า** มาแทน
+    → exit price ซ้ำข้ามไม้ + PnL เพี้ยน (ข้อมูลจริงเจอ 8 ไม้, ไม้นึงบันทึก -3.15R
+    ทั้งที่ SL cap ไว้ ~-1.1R)
+
+    คืน (price, n_fills) — (None, 0) ถ้าหาไม่เจอ: **ไม่เดา** ให้ caller mark ว่าเชื่อไม่ได้
+    """
+    entry_ms = t.get("entry_ms")
+    if entry_ms is None:                     # ไม้เก่าที่บันทึกก่อนมี entry_ms
+        try:
+            entry_ms = int(datetime.fromisoformat(t["entry_time"]).timestamp() * 1000)
+        except (ValueError, TypeError, KeyError):
+            return None, 0
+    since = int(entry_ms) - 60_000           # เผื่อ clock skew เล็กน้อย
+    try:
+        fills = _retry(lambda: ex.fetch_my_trades(symbol, since=since, limit=100))
+    except Exception as e:
+        logger.warning(f"ดึง fills ไม่ได้: {str(e)[:60]}")
+        return None, 0
+
+    exit_side = "sell" if t["action"] == "LONG" else "buy"
+    cands = [f for f in fills
+             if f.get("side") == exit_side and int(f.get("timestamp") or 0) >= since]
+    if not cands:
+        return None, 0
+    # market close อาจแตกเป็นหลาย fill → ถ่วงน้ำหนักด้วยขนาด
+    tot = sum(float(f.get("amount") or 0) for f in cands)
+    if tot <= 0:
+        return float(cands[-1]["price"]), len(cands)
+    vwap = sum(float(f["price"]) * float(f.get("amount") or 0) for f in cands) / tot
+    return vwap, len(cands)
+
+
 def record_closed_trade(ex, t: dict, symbol=SYMBOL, exit_price=None, exit_reason=None) -> dict:
     """
     ไม้ปิดแล้ว → คำนวณ outcome + MFE/MAE% → บันทึก trade_log
-    exit_price/exit_reason: ถ้าให้มา (เช่นตอน reverse) ใช้เลย; ไม่งั้นดึงจาก fills + เดา SL/TP
+    exit_price/exit_reason: ถ้าให้มา (เช่นตอน reverse) ใช้เลย; ไม่งั้นหาจาก fill จริง
+
+    หา exit ไม่เจอ → บันทึกเป็น record ที่ **ไม่มี pnl_pct** + `exit_unreliable=True`
+    (ดีกว่าเดาราคาแล้วปล่อยให้ตัวเลขเท็จไปปนในสถิติ — dashboard/trade_stats กรองทิ้งเอง)
     """
     entry = t["entry"]
     if exit_price is None:
-        exit_price = entry
-        try:
-            fills = ex.fetch_my_trades(symbol, limit=20)
-            exit_side = "sell" if t["action"] == "LONG" else "buy"
-            for f in reversed(fills):
-                if f.get("side") == exit_side:
-                    exit_price = float(f["price"])
-                    break
-        except Exception as e:
-            logger.warning(f"ดึง exit price ไม่ได้ ใช้ entry แทน: {str(e)[:60]}")
+        exit_price, n_fills = _find_exit_fill(ex, t, symbol)
+        if exit_price is None:
+            logger.error(f"หา exit fill ของไม้ {t['action']} @ {entry} ไม่เจอ "
+                         f"→ บันทึกเป็น 'เชื่อไม่ได้' (ไม่นับในสถิติ)")
+            closed = {
+                "mode": "LIVE_DEMO", "action": t["action"], "symbol": symbol,
+                "entry": round(entry, 2), "exit": None,
+                "sl": t["sl"], "tp": t["tp"], "size": t.get("size"),
+                "entry_time": t["entry_time"],
+                "exit_time": datetime.now().isoformat(timespec="seconds"),
+                "exit_reason": "unknown", "exit_unreliable": True,
+                "confluence": t.get("confluence"),
+            }
+            _append_log(closed)
+            return closed
+        logger.info(f"exit fill: {exit_price:.2f} (จาก {n_fills} fill)")
 
     if t["action"] == "LONG":
         pnl_pct = (exit_price - entry) / entry
@@ -278,8 +360,19 @@ def record_closed_trade(ex, t: dict, symbol=SYMBOL, exit_price=None, exit_reason
         mae_pct = (entry - t["mae_price"]) / entry
     pnl_pct -= 2 * FEE
 
+    # exit_reason จากราคาจริง: ไม้ปกติต้องจบใกล้ SL หรือ TP — ถ้าไม่ใกล้ทั้งคู่
+    # แปลว่าถูกปิดกลางทาง (orphan cleanup / order ของไม้เก่าค้าง) → ต้องรู้ ไม่ใช่เดาว่า SL
+    sl_dist = abs(entry - t["sl"])
+    off_sl = abs(exit_price - t["sl"]) / sl_dist if sl_dist > 0 else 99.0
+    off_tp = abs(exit_price - t["tp"]) / sl_dist if sl_dist > 0 else 99.0
+    off_r = round(min(off_sl, off_tp), 3)
     if exit_reason is None:
-        exit_reason = "SL" if abs(exit_price - t["sl"]) < abs(exit_price - t["tp"]) else "TP"
+        if off_r > _EXIT_TOL_R:
+            exit_reason = "other"
+            logger.warning(f"exit {exit_price:.2f} ไม่ตรงทั้ง SL {t['sl']} และ TP {t['tp']} "
+                           f"(ห่าง {off_r:.2f}R) — ไม้นี้ถูกปิดกลางทาง")
+        else:
+            exit_reason = "SL" if off_sl < off_tp else "TP"
     reason = exit_reason
 
     try:
@@ -298,6 +391,7 @@ def record_closed_trade(ex, t: dict, symbol=SYMBOL, exit_price=None, exit_reason
         "pnl_pct": round(pnl_pct, 4),
         "mfe_pct": round(mfe_pct, 4), "mae_pct": round(mae_pct, 4),
         "confluence": t.get("confluence"),
+        "exit_off_r": off_r,   # exit ห่างจาก SL/TP กี่ R (0 = ตรงเป๊ะ) — ใช้ตรวจคุณภาพข้อมูล
     }
     _append_log(closed)
     logger.info(f"[CLOSED] {t['action']} {'WIN' if closed['won'] else 'LOSS'} "
@@ -345,7 +439,11 @@ def add_to_position(ex, signal: dict, max_pyramid: int, symbol=SYMBOL) -> dict:
 
     _retry(lambda: ex.create_order(symbol, "market", side, add_size))
 
-    pos = get_open_position(ex, symbol)
+    try:
+        pos = get_open_position(ex, symbol)
+    except PositionQueryError:
+        logger.error("pyramid: verify position ไม่ได้ → SL/TP ยังเป็นของ size เดิม")
+        return {"status": "failed", "reason": "verify_failed"}
     if not pos:
         return {"status": "failed", "reason": "no_position_after_add"}
     avg = float(pos["entryPrice"])

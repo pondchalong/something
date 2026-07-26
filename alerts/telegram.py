@@ -43,6 +43,15 @@ def send_alert(signal: dict) -> bool:
 
 def send_closed_alert(closed: dict) -> bool:
     """แจ้งเตือนตอนไม้ปิด (SL/TP/reverse) พร้อมผล win/loss + MFE/MAE"""
+    # หา exit fill ไม่เจอ → ไม่มี pnl ให้รายงาน (ดู executor.record_closed_trade)
+    if closed.get("exit_unreliable") or closed.get("pnl_pct") is None:
+        return _send(
+            f"⚠️ *ปิดไม้ — ผลไม่ทราบ* — {closed.get('symbol', SYMBOL)}\n\n"
+            f"{closed['action']} | entry `{closed['entry']}`\n"
+            f"หาราคาปิดจริงไม่เจอ (testnet ตอบไม่ได้) → ไม่บันทึกเป็นสถิติ\n"
+            f"เช็ค position/order บน testnet ด้วย"
+        )
+
     won = closed.get("won")
     emoji = "✅" if won else "❌"
     res = "WIN" if won else "LOSS"

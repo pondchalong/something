@@ -63,6 +63,8 @@ something/
 ├── config.py                # env vars + settings
 ├── test_connection.py       # ทดสอบ exchange + indicators + signal + Telegram
 ├── test_trade_stats.py      # unit test ของ trade_stats (offline ไม่ต้องต่อ network)
+├── test_executor_exit.py    # unit test trade lifecycle (exchange ปลอม, offline)
+├── test_live_demo_loop.py   # test state machine ของ live_demo (offline)
 ├── requirements.txt         # pinned deps
 ├── runtime.txt / Procfile   # Railway config
 ├── .env / .env.example      # secrets (gitignored)
@@ -222,7 +224,7 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
   - **Partial TP (`partial_tp`, `partial_tp_r`, `partial_tp_pct`, `partial_be`):** ถึง `partial_tp_r` R → ปิดบางส่วน + (option) ขยับที่เหลือเป็นทุน
   - engine เช็ค conservative: SL/TP/partial ของระดับแท่งก่อน → ค่อยอัปเดต trail/BE จาก high/low แท่งนี้ (มีผลแท่งถัดไป, ไม่ lookahead). fee model + MFE/MAE คงเดิม (ปิด features = ผลเท่าเดิมเป๊ะ)
   - ⚠️ **finding (5000 แท่ง/52d, paginated):** exit management **ลด return/Sharpe ทุกแบบ** — baseline SL/TP→2R ดีสุด (+9% PF1.48 Sharpe1.43) เพราะ edge มาจากไม้ที่วิ่งยาวถึง 2R, trail/partial ไป "ตัดกำไรเร็ว" ฆ่า runner. winrate ขึ้นจริง (52–70%) แต่ expectancy ลด. ตัวเดียวที่น่าสนใจ = **BE+trail** (ลด MaxDD แลก return นิดหน่อย) ถ้าต้องการ equity เรียบ. **อย่าเปิด default — เปิดเมื่อ optimize/regime ใหม่ยืนยัน**
-- `trading/live_demo.py` — state machine: ถือไม้→update MFE/MAE ทุก loop, position หาย→`record_closed_trade()`, ว่าง+signal→execute
+- `trading/live_demo.py` — state machine: ถือไม้→update MFE/MAE ทุก loop, position หาย (**ยืนยันแล้ว**)→`record_closed_trade()` + `cancel_open_orders()`, ว่าง+signal→execute. **query position พลาด → ข้ามรอบไปเลย ไม่แตะไม้ที่ถืออยู่** (`PositionQueryError`)
 - **Trade stats (MFE/MAE):** เปิดไม้ → `open_trade.json` track high/low ระหว่างถือ; ปิด → บันทึก outcome ลง `trade_log.json`: win/loss, exit price/reason (SL/TP), pnl%, **MFE%** (ไปได้เปรียบสุด), **MAE%** (ไปเสียเปรียบสุด), duration. ดู + Export CSV ใน dashboard Demo Trades
 
 **Trade Stats — forward validation (analysis/trade_stats.py):**
@@ -307,6 +309,10 @@ py -3.12 -m trading.live_demo
 py -3.12 -m analysis.trade_stats                      # อ่าน trade_log.json ตาม DATA_DIR
 py -3.12 -m analysis.trade_stats --file demo_trades.csv   # CSV ที่ export จาก dashboard
 py -3.12 test_trade_stats.py                          # unit test
+
+# test lifecycle ของไม้ + state machine (offline ทั้งคู่ ไม่ต้องต่อ testnet)
+py -3.12 test_executor_exit.py
+py -3.12 test_live_demo_loop.py
 ```
 
 ---
@@ -326,12 +332,13 @@ py -3.12 test_trade_stats.py                          # unit test
 - **Error 418 / -1003 "Way too many requests" (IP ban):** ยิง request ถี่เกิน → Binance auto-ban IP (ทั้ง testnet + public OHLCV เพราะ IP เดียวกัน). **แก้ 2 ชั้น:** (1) `enableRateLimit=True` ทุก ccxt instance (testnet + public fetcher) → ccxt throttle เอง; (2) `_is_transient()` ถือว่า rate-limit/ban (DDoSProtection, 418/429/-1003) = **ไม่ retry** — ถ้า retry ตอนโดนแบนจะยิ่งยืดเวลาแบน, ต้องหยุดยิงให้ ban หมดอายุเอง (loop sleep 60s ต่อรอบอยู่แล้ว)
 - **Error -2021 "Order would immediately trigger":** ตั้ง SL/TP แล้ว stopPrice อยู่ผิดข้างของ mark price → Binance reject. เกิดเพราะตั้ง SL/TP จาก `signal["price"]` (close แท่ง signal) แต่ market fill จริงช้ากว่า ~1-2s ราคาขยับ. **แก้:** `execute_signal()` ดึง `entryPrice` จริงจาก position แล้ว recompute SL/TP จาก entry นั้น (distance เดิม) → stopPrice อยู่ถูกข้างเสมอ. ถ้ายัง fail (ตลาดวิ่งแรงมาก) → ปิด position กันเปลือยเหมือนเดิม
 - **Binance futures conditional orders (SL/TP):** STOP_MARKET/TAKE_PROFIT_MARKET **ไม่อยู่ใน `fetch_open_orders()` ปกติ** — ต้อง `params={'stop': True}`. และ `cancel_all_orders()` ปกติ **ไม่ลบ** conditional ด้วย → ต้อง cancel ซ้ำด้วย stop param (ดู `executor._cancel_all()`) ไม่งั้น SL/TP ค้างสะสม. *เคย diagnose ผิดว่า position "เปลือย" เพราะ query นี้*
-- 🚨 **exit price ที่บันทึกเชื่อไม่ได้ ~50% ของไม้ (ยังไม่แก้ — บล็อกการวัดผล strategy):** ไม้ควรจบที่ SL หรือ TP เท่านั้น แต่ข้อมูลจริง 46/93 ไม้ปิดที่ราคาอื่น, 8 ไม้มี exit price **ซ้ำเป๊ะกับไม้อื่น**, และมีไม้บันทึก -3.15R ทั้งที่ SL cap ไว้ที่ ~-1.1R. สาเหตุที่เข้าข่าย (2 อย่าง เสริมกัน):
-  1. **`get_open_position()` คืน `None` ได้ทั้ง "ไม่มี position" และ "query fail หลัง retry หมด"** (executor.py:93-95) → live_demo เข้าใจว่าไม้ปิดแล้ว → `record_closed_trade()` ไปหยิบ fill **ฝั่งตรงข้ามตัวล่าสุด** ซึ่งเป็นของ**ไม้ก่อนหน้า** มาเป็น exit price (→ ราคาซ้ำ) → `clear_open_trade()` → รอบถัดไปเจอ position ไม่มี state = orphan → **ปิดทิ้งที่ market** ทั้งที่ไม้ยังดีอยู่
-  2. **ไม่ cancel SL/TP ที่ค้างหลังไม้ปิดปกติ** — live_demo สาขา `open_trade and not has_pos` เรียกแค่ `record_closed_trade` + `clear_open_trade` ไม่ได้เรียก `_cancel_all()` → conditional order ของไม้เก่าค้างไปปิดไม้ถัดไปที่ราคาไม่เกี่ยวข้อง
-  - **ผลกระทบ:** ตัดไม้กำไรทิ้งอย่างเป็นระบบ (ไม้ชนะใช้เวลานาน → โดนขัดจังหวะง่ายกว่าไม้แพ้ที่ชน SL เร็ว) → สถิติ demo **แย่กว่าความจริง** และ **ห้ามใช้ optimize params**
-  - **แนวแก้:** แยก "ไม่มี position" ออกจาก "query fail" (raise หรือ sentinel) อย่าให้ fail เงียบเป็น None · หา exit fill ด้วย order id / timestamp หลัง `entry_time` แทน "fill ล่าสุดฝั่งตรงข้าม" · `_cancel_all()` ทุกครั้งที่ไม้ปิด · ถ้าหา exit ไม่ได้ ให้ mark record ว่าไม่น่าเชื่อแทนที่จะเดา
+- ✅ **exit price ที่บันทึกเชื่อไม่ได้ ~50% ของไม้ (แก้แล้ว 26 ก.ค. 2026 — ข้อมูลก่อนหน้านี้ใช้วัดผลไม่ได้):** ไม้ควรจบที่ SL หรือ TP เท่านั้น แต่ข้อมูล 93 ไม้แรกมี 46 ไม้ปิดที่ราคาอื่น, 8 ไม้ exit price **ซ้ำเป๊ะกับไม้อื่น**, และมีไม้บันทึก -3.15R ทั้งที่ SL cap ที่ ~-1.1R. สาเหตุ 2 อย่างเสริมกัน:
+  1. **`get_open_position()` คืน `None` ทั้ง "ไม่มี position" และ "query fail"** → live_demo เข้าใจว่าไม้ปิด → `record_closed_trade()` หยิบ fill **ฝั่งตรงข้ามตัวล่าสุด** ซึ่งเป็นของ**ไม้ก่อนหน้า** (→ ราคาซ้ำ) → `clear_open_trade()` → รอบถัดไป position ไม่มี state = orphan → **ปิดทิ้งที่ market** ทั้งที่ไม้ยังดีอยู่
+  2. **ไม่ cancel SL/TP ที่ค้างหลังไม้ปิด** → conditional order ของไม้เก่าไปปิดไม้ถัดไปที่ราคาไม่เกี่ยวข้อง
+  - **ผลกระทบ:** ตัดไม้กำไรทิ้งอย่างเป็นระบบ (ไม้ชนะใช้เวลานาน → โดนขัดจังหวะง่ายกว่าไม้แพ้ที่ชน SL เร็ว) → สถิติ demo **แย่กว่าความจริง**
+  - **ที่แก้:** `get_open_position()` raise `PositionQueryError` แทนคืน None (live_demo เจอ → ข้ามรอบ ไม่แตะไม้) · `_find_exit_fill()` กรอง fill ด้วย `entry_ms` (epoch ms ที่บันทึกตอนเปิดไม้) → หยิบเฉพาะ fill ที่เกิดหลังเปิดไม้ + VWAP ถ้าแตกหลาย fill · หา exit ไม่เจอ → บันทึก `exit_unreliable=True` **ไม่มี `pnl_pct`** (ไม่ปนในสถิติ) แทนการเดาราคา · `cancel_open_orders()` ทุกครั้งที่ไม้ปิด · `exit_reason` ใหม่มีค่า **`other`** = ปิดกลางทาง (ไม่ใช่ SL/TP) + field `exit_off_r` บอกว่าห่างจาก SL/TP กี่ R
   - ตรวจได้ด้วย `py -3.12 -m analysis.trade_stats` (section "ความน่าเชื่อของ exit price") หรือ dashboard → Demo Trades
+  - 📌 **ข้อมูลใหม่หลังแก้ต้องเก็บใหม่ทั้งหมด** — อย่าเอาไม้ก่อน 26 ก.ค. มารวมวัดผล
 - **Railway auto-deploy:** ถ้า deploy ค้าง commit เก่า → เช็ค Auto Deploy ON + branch ที่ผูก, trigger redeploy manual
 - **ดึง trade_log ออกจาก Railway:** filesystem ของ Railway เข้าจากข้างนอกตรงๆ ไม่ได้ → ใช้ dashboard → Demo Trades → **Export CSV** (หรือ Railway CLI: `railway run cat /data/trade_log.json > demo.json`) แล้ววิเคราะห์ด้วย `py -3.12 -m analysis.trade_stats --file demo.csv`
 - **Claude Code (web) เข้า exchange API / Railway URL ไม่ได้:** environment มี egress proxy ที่บล็อก host นอก allowlist → `curl`/ccxt ได้ **403 CONNECT tunnel failed** (ไม่ใช่ geo-block ของ exchange, และ retry ไม่ช่วย). ผลคือรัน backtest/optimizer ที่ต้อง fetch OHLCV ไม่ได้ใน session นั้น → ใช้ `analysis/trade_stats.py` (offline) วิเคราะห์จากไฟล์แทน, หรือแก้ network policy ของ environment ให้ผ่าน `api.binance.com` ฯลฯ
