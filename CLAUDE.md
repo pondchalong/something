@@ -62,6 +62,7 @@ something/
 ├── dashboard.py             # Streamlit web app (chart, SMC tab, signal history, exchange dropdown)
 ├── config.py                # env vars + settings
 ├── test_connection.py       # ทดสอบ exchange + indicators + signal + Telegram
+├── test_trade_stats.py      # unit test ของ trade_stats (offline ไม่ต้องต่อ network)
 ├── requirements.txt         # pinned deps
 ├── runtime.txt / Procfile   # Railway config
 ├── .env / .env.example      # secrets (gitignored)
@@ -70,7 +71,8 @@ something/
 ├── analysis/
 │   ├── indicators.py        # EMA, RSI, MACD, BB, ATR + เรียก advanced (รับ params)
 │   ├── indicators_advanced.py  # 4 indicators จาก TradingView (ดู Indicators)
-│   └── signals.py           # Signal engine + confluence scoring (รับ params)
+│   ├── signals.py           # Signal engine + confluence scoring (รับ params)
+│   └── trade_stats.py       # วิเคราะห์ demo trades ที่เก็บจริง (forward validation, ดู Trade Stats)
 ├── alerts/
 │   └── telegram.py          # ส่ง Telegram message
 ├── utils/
@@ -184,6 +186,7 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 - Backtest: ปุ่มรัน backtest (active params) → metrics + equity curve + trade list
 - Optimizer: แสดง candidate (best params, train vs test, overfit warning) + ปุ่ม **Apply** (manual approve → เขียน active_params.json)
 - Demo Trades: open position + summary stats (winrate, total/avg PnL, avg MFE/MAE, "แพ้แต่เคยบวก", ชนะโดน TP) + trade table + **Export CSV**
+  + section **วิเคราะห์เชิงลึก** (จาก `analysis/trade_stats.py`): PF / expectancy / MaxDD / Sharpe, ตารางแยกตาม **ชุด params ที่ live ตอนนั้น**, breakdown ทิศทาง/confluence/ชั่วโมง, ประเมิน BE-trailing (ดู Trade Stats)
 
 ---
 
@@ -221,6 +224,15 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
   - ⚠️ **finding (5000 แท่ง/52d, paginated):** exit management **ลด return/Sharpe ทุกแบบ** — baseline SL/TP→2R ดีสุด (+9% PF1.48 Sharpe1.43) เพราะ edge มาจากไม้ที่วิ่งยาวถึง 2R, trail/partial ไป "ตัดกำไรเร็ว" ฆ่า runner. winrate ขึ้นจริง (52–70%) แต่ expectancy ลด. ตัวเดียวที่น่าสนใจ = **BE+trail** (ลด MaxDD แลก return นิดหน่อย) ถ้าต้องการ equity เรียบ. **อย่าเปิด default — เปิดเมื่อ optimize/regime ใหม่ยืนยัน**
 - `trading/live_demo.py` — state machine: ถือไม้→update MFE/MAE ทุก loop, position หาย→`record_closed_trade()`, ว่าง+signal→execute
 - **Trade stats (MFE/MAE):** เปิดไม้ → `open_trade.json` track high/low ระหว่างถือ; ปิด → บันทึก outcome ลง `trade_log.json`: win/loss, exit price/reason (SL/TP), pnl%, **MFE%** (ไปได้เปรียบสุด), **MAE%** (ไปเสียเปรียบสุด), duration. ดู + Export CSV ใน dashboard Demo Trades
+
+**Trade Stats — forward validation (analysis/trade_stats.py):**
+- อ่านผลเทรด**จริง**ที่บันทึกไว้ (`trade_log.json` ตาม `DATA_DIR` หรือ CSV ที่ export จาก dashboard) → คำนวณ metrics ด้วย `backtest.metrics.compute_metrics` **ตัวเดียวกับ backtest** → เทียบ demo vs backtest ได้ตรงๆ ว่า edge มาจริงไหม
+- **ไม่ต้องต่อ network/exchange** — วิเคราะห์จากไฟล์อย่างเดียว (ใช้ตอน exchange API เข้าไม่ถึงได้)
+- `to_metric_trades()` แปลงหน่วย: demo เก็บ `mfe_pct/mae_pct` เป็น % ของ **ราคา entry** แต่ backtest ใช้ % ของ **ระยะถึง TP/SL** → `(pct × entry) / distance`
+- **แยกตาม param era อัตโนมัติ:** `param_eras()` ดึง git log ของ `strategy/active_params.json` + `git show` แต่ละ commit → รู้ว่าไม้แต่ละไม้รัน params ชุดไหน (ไม้เก่าที่รัน params คนละชุดจะไม่ถูกเอามาตัดสิน strategy ปัจจุบัน). ใช้ commit date เป็นขอบเขต — Railway redeploy ตามหลัง push ไม่กี่นาที
+- breakdown: ทิศทาง / exit reason / confluence / ชั่วโมงที่เข้า · `exit_management_whatif()` ประเมินว่า BE-trailing จะช่วยไหม (**ขอบบน** — MFE/MAE ไม่บอกลำดับก่อนหลัง ต้อง confirm ด้วย backtest engine)
+- `data_quality()` จับ record ที่ **exit == entry** = ตอนบันทึกดึงราคาปิดจาก testnet ไม่ได้ (502) แล้ว fallback เป็น entry → ไม้นั้นถูกนับเป็น "แพ้ค่า fee" ทั้งที่ผลจริงไม่ทราบ, และกรอง record ของ DRY_RUN (ไม่มี `pnl_pct`) ออกจากสถิติ
+- test: `py -3.12 test_trade_stats.py` (9 เคส ตัวเลขคำนวณมือ, offline)
 
 **Self-learning scope:** ตอนนี้ = optimize params ของ strategy ปัจจุบัน (ยังไม่ใช่ RL discover strategy ใหม่)
 
@@ -280,6 +292,11 @@ py -3.12 -m backtest.optimizer --trials 100 --limit 2000
 
 # live demo (DRY_RUN=true = ทดสอบ ไม่ยิง order จริง)
 py -3.12 -m trading.live_demo
+
+# วิเคราะห์สถิติ demo trades ที่เก็บจริง (offline — ไม่ต้องต่อ exchange)
+py -3.12 -m analysis.trade_stats                      # อ่าน trade_log.json ตาม DATA_DIR
+py -3.12 -m analysis.trade_stats --file demo_trades.csv   # CSV ที่ export จาก dashboard
+py -3.12 test_trade_stats.py                          # unit test
 ```
 
 ---
@@ -300,6 +317,8 @@ py -3.12 -m trading.live_demo
 - **Error -2021 "Order would immediately trigger":** ตั้ง SL/TP แล้ว stopPrice อยู่ผิดข้างของ mark price → Binance reject. เกิดเพราะตั้ง SL/TP จาก `signal["price"]` (close แท่ง signal) แต่ market fill จริงช้ากว่า ~1-2s ราคาขยับ. **แก้:** `execute_signal()` ดึง `entryPrice` จริงจาก position แล้ว recompute SL/TP จาก entry นั้น (distance เดิม) → stopPrice อยู่ถูกข้างเสมอ. ถ้ายัง fail (ตลาดวิ่งแรงมาก) → ปิด position กันเปลือยเหมือนเดิม
 - **Binance futures conditional orders (SL/TP):** STOP_MARKET/TAKE_PROFIT_MARKET **ไม่อยู่ใน `fetch_open_orders()` ปกติ** — ต้อง `params={'stop': True}`. และ `cancel_all_orders()` ปกติ **ไม่ลบ** conditional ด้วย → ต้อง cancel ซ้ำด้วย stop param (ดู `executor._cancel_all()`) ไม่งั้น SL/TP ค้างสะสม. *เคย diagnose ผิดว่า position "เปลือย" เพราะ query นี้*
 - **Railway auto-deploy:** ถ้า deploy ค้าง commit เก่า → เช็ค Auto Deploy ON + branch ที่ผูก, trigger redeploy manual
+- **ดึง trade_log ออกจาก Railway:** filesystem ของ Railway เข้าจากข้างนอกตรงๆ ไม่ได้ → ใช้ dashboard → Demo Trades → **Export CSV** (หรือ Railway CLI: `railway run cat /data/trade_log.json > demo.json`) แล้ววิเคราะห์ด้วย `py -3.12 -m analysis.trade_stats --file demo.csv`
+- **Claude Code (web) เข้า exchange API / Railway URL ไม่ได้:** environment มี egress proxy ที่บล็อก host นอก allowlist → `curl`/ccxt ได้ **403 CONNECT tunnel failed** (ไม่ใช่ geo-block ของ exchange, และ retry ไม่ช่วย). ผลคือรัน backtest/optimizer ที่ต้อง fetch OHLCV ไม่ได้ใน session นั้น → ใช้ `analysis/trade_stats.py` (offline) วิเคราะห์จากไฟล์แทน, หรือแก้ network policy ของ environment ให้ผ่าน `api.binance.com` ฯลฯ
 
 ---
 
