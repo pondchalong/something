@@ -13,7 +13,7 @@ import optuna
 from analysis.indicators import add_indicators
 from data.fetcher import fetch_ohlcv, fetch_htf_ohlcv
 from strategy.params import StrategyParams
-from backtest.engine import simulate, FEE, WARMUP
+from backtest.engine import simulate, FEE, WARMUP, SLIPPAGE
 from backtest.results import save_candidate
 
 TIMEFRAMES = ["15m", "30m", "1h"]
@@ -32,18 +32,19 @@ def _prepare(symbol: str, limit: int) -> dict:
     return cache
 
 
-def _split_backtest(full_df, df_htf, params):
+def _split_backtest(full_df, df_htf, params, slippage: float = SLIPPAGE):
     """add_indicators บน full df → simulate train + test portion"""
     df_ind = add_indicators(full_df, df_htf, params)
     n = len(df_ind)
     k = int(n * TRAIN_RATIO)
-    train_res = simulate(df_ind, params, FEE, WARMUP, k)
-    test_res = simulate(df_ind, params, FEE, max(k, WARMUP), n)
+    train_res = simulate(df_ind, params, FEE, WARMUP, k, slippage)
+    test_res = simulate(df_ind, params, FEE, max(k, WARMUP), n, slippage)
     return train_res, test_res
 
 
-def optimize(symbol: str = "BTC/USDT", limit: int = 1500, n_trials: int = 30) -> dict:
-    print(f"Preparing data ({symbol}) ...")
+def optimize(symbol: str = "BTC/USDT", limit: int = 1500, n_trials: int = 30,
+             slippage: float = SLIPPAGE) -> dict:
+    print(f"Preparing data ({symbol}, slippage {slippage*10000:g} bps/ข้าง) ...")
     cache = _prepare(symbol, limit)
 
     def objective(trial):
@@ -56,7 +57,7 @@ def optimize(symbol: str = "BTC/USDT", limit: int = 1500, n_trials: int = 30) ->
             timeframe=tf,
         )
         full_df, df_htf = cache[tf]
-        train_res, _ = _split_backtest(full_df, df_htf, params)
+        train_res, _ = _split_backtest(full_df, df_htf, params, slippage)
         if train_res.metrics["num_trades"] < MIN_TRADES:
             return -5.0
         return train_res.metrics["sharpe"]
@@ -67,7 +68,7 @@ def optimize(symbol: str = "BTC/USDT", limit: int = 1500, n_trials: int = 30) ->
     # Best params → eval บน train + test (indicator warm จาก full df)
     best = StrategyParams.from_dict(study.best_params)
     full_df, df_htf = cache[best.timeframe]
-    train_res, test_res = _split_backtest(full_df, df_htf, best)
+    train_res, test_res = _split_backtest(full_df, df_htf, best, slippage)
 
     save_candidate(best.to_dict(), train_res.metrics, test_res.metrics)
 
@@ -95,8 +96,10 @@ def main():
     ap.add_argument("--symbol", default="BTC/USDT")
     ap.add_argument("--limit", type=int, default=1500)
     ap.add_argument("--trials", type=int, default=30)
+    ap.add_argument("--slippage", type=float, default=SLIPPAGE * 10000,
+                    help="slippage ต่อข้าง หน่วย bps — ตั้ง 0 = สมมติได้ราคาเป๊ะ (มองโลกสวยเกินจริง)")
     args = ap.parse_args()
-    optimize(args.symbol, args.limit, args.trials)
+    optimize(args.symbol, args.limit, args.trials, args.slippage / 10000)
 
 
 if __name__ == "__main__":
