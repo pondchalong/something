@@ -68,6 +68,8 @@ something/
 ├── test_trade_stats.py      # unit test ของ trade_stats (offline ไม่ต้องต่อ network)
 ├── test_executor_exit.py    # unit test trade lifecycle (exchange ปลอม, offline)
 ├── test_live_demo_loop.py   # test state machine ของ live_demo (offline)
+├── test_backtest_slippage.py # unit test slippage model ของ backtest engine (offline)
+├── test_reconcile.py        # unit test reconcile + การดึง fill (offline)
 ├── requirements.txt         # pinned deps
 ├── runtime.txt / Procfile   # Railway config
 ├── .env / .env.example      # secrets (gitignored)
@@ -199,7 +201,12 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 ## Phase 2 — Backtest / Optimizer / Executor
 
 **Backtest (backtest/engine.py):**
-- `simulate(df, params, fee, start, end)` — loop candle [start,end), reuse `generate_signal()` 100%, จำลอง SL/TP hit, fee 0.04%×2
+- `simulate(df, params, fee, start, end, slippage)` — loop candle [start,end), reuse `generate_signal()` 100%, จำลอง SL/TP hit, fee 0.04%×2
+- **Slippage model (เพิ่ม 26 ก.ค. — สำคัญมาก):** ทุกไม้จริงเป็น market order (เข้า = market, SL/TP = STOP/TAKE_PROFIT_MARKET ที่ trigger แล้วกลายเป็น market) → ราคาที่ได้แย่กว่าที่ตั้งใจเสมอ. `slippage` = ส่วนต่างต่อข้าง (fraction; CLI รับเป็น **bps**)
+  - ขาเข้า: fill แย่กว่า close ของแท่ง signal แล้ว**ตั้ง SL/TP จาก entry จริง** (ระยะเดิม R:R คงที่ — เหมือน executor) → ต้นทุนของ slippage ขาเข้าไม่ได้กินกำไรตรงๆ แต่ทำให้ **TP ไกลขึ้น = โอกาสถึงน้อยลง**
+  - ขาออก: ระดับ SL/TP ใช้ตัดสินว่า trigger ไหม แต่ราคาที่ได้จริงแย่กว่าระดับนั้น
+  - `slippage=0` = พฤติกรรมเดิมเป๊ะ (ผลเก่าทั้งหมดยังเทียบกันได้) · sweep: `py -3.12 -m backtest.engine --sweep`
+  - test: `py -3.12 test_backtest_slippage.py` (7 เคส, offline)
 - `run_backtest(df, params, df_htf)` — add_indicators + simulate ทั้ง df
 - indicators ทุกตัวเป็น **causal** (ใช้แค่อดีต) → ไม่มี lookahead bias
 - entry = close ของ candle ที่เกิด signal, exit เช็คจาก candle ถัดไป (high/low แตะ SL/TP; โดนทั้งคู่ = SL ก่อน conservative)
@@ -207,6 +214,7 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 **Optimizer (backtest/optimizer.py):**
 - Optuna maximize Sharpe — search: `atr_multiplier, risk_reward, confluence_min, st_factor, timeframe`
 - **Train/test split 70/30:** add_indicators บน full df ครั้งเดียว → simulate train [warmup,k) + test [k,n) (test ได้ indicator ที่ warm จาก train — กันปัญหา warmup กิน test set)
+- **`--slippage <bps>`** (เพิ่ม 26 ก.ค.) — ส่งต่อเข้า simulate ทั้ง train/test. **ตอน optimize รอบหน้าต้องตั้ง ≥5** ไม่งั้นจะได้ params ที่กำไรเฉพาะในโลกที่ execution สมบูรณ์แบบ (ดูตารางเทียบช่วงจริง)
 - penalize ถ้า train trades < 10; overfit check: test Sharpe < train×0.5 → เตือน
 - best params → `save_candidate()` (รอ approve, ไม่ auto-apply)
 - รัน: `py -3.12 -m backtest.optimizer --trials 100`
@@ -283,6 +291,23 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 - 🔑 **fee ต่อ R ขึ้นกับระยะ SL:** `fee_R ≈ 0.0008 / (ระยะ SL เป็นสัดส่วนของราคา)` — SL แคบ (15m ATR) → size ใหญ่ → fee กิน R เยอะ. อยากลด fee ต่อ R ต้อง **SL กว้างขึ้น / TF สูงขึ้น / เทรดถี่น้อยลง** (เอาไปเป็นทิศทางตอน optimize รอบหน้า)
 - ⚠️ **ยังทำไม่ครบ:** เทียบ exit price รายไม้ (log vs จริง) ยังทำไม่ได้ เพราะ `trade_log.json` บนเครื่อง local มีแค่ 2 record เก่า — ต้อง export CSV/JSON จาก Railway มาก่อนแล้วรัน `--log <path>`
 
+**🔬 backtest บนช่วงเวลาเดียวกับที่ bot รันจริง (1 มิ.ย.–26 ก.ค., active params, 26 ก.ค.):**
+
+| slippage/ข้าง | ไม้ | return | winrate | PF | Sharpe | gross/ไม้ | net/ไม้ |
+|---|---|---|---|---|---|---|---|
+| 0 bps | 89 | +12.61% | 48.3% | 1.58 | 1.85 | +0.216% | +0.136% |
+| 2 bps | 93 | +8.36% | 46.2% | 1.35 | 1.24 | +0.169% | +0.089% |
+| **5 bps** | 99 | **-0.00%** | 41.4% | 1.01 | 0.03 | +0.082% | +0.002% |
+| **10 bps** | **107** | **-15.37%** | 30.8% | 0.60 | -2.41 | **-0.074%** | **-0.154%** |
+| 20 bps | 115 | -33.40% | 21.7% | 0.31 | -6.07 | -0.271% | -0.351% |
+| **ของจริง (ตัดไม้บั๊ก)** | **108** | — | 40.0% | 0.49 | — | **-0.043%** | **-0.123%** |
+| ของจริง (ทั้งหมด) | 123 | -24.27% | 35.0% | 0.40 | — | -0.076% | -0.156% |
+
+- 🎯 **backtest ที่ slippage 10 bps/ข้าง ≈ ของจริงเกือบทุกช่อง** (จำนวนไม้ 107 vs 108, gross/ไม้ -0.074% vs -0.076%, net -0.154% vs -0.156%) — ต่างกันแค่ winrate. ที่ 0 bps backtest บอก **+12.61%** ทั้งที่ช่วงเดียวกัน bot ขาดทุนจริง
+- ❗ **จุดคุ้มทุนอยู่ที่ ~5 bps/ข้าง** — edge บางมาก ต้นทุน execution เกินนี้นิดเดียวก็ติดลบ
+- 📏 **แต่ entry slippage ที่วัดได้จริง ≈ 0** (เทียบ fill กับ close ของแท่ง 15m: median -0.06 bps, ก.ค. -1.4 bps, ดีเลย์ median 38s) → **ต้นทุน 10 bps ไม่ได้อยู่ที่ขาเข้า** เหลือ 2 คำอธิบาย: (ก) ขาออก — SL/TP เป็น stop-market ที่ trigger ตอนราคาวิ่งแรง จึง fill แย่กว่าระดับที่ตั้ง (backtest เดิมสมมติได้เป๊ะ) (ข) ของจริงเทรดถี่กว่า backtest 20% (108 vs 89 ไม้) = เข้าไม้ที่ backtest ไม่นับ. **ยังพิสูจน์ไม่ได้ว่าเป็นข้อไหน** — ต้องมี SL/TP รายไม้จาก `trade_log.json` (Railway) มาเทียบกับ exit fill ถึงจะแยกได้
+- ⚠️ **10 bps คือค่าที่ fit ให้ตรงผลรวม ไม่ใช่ค่าที่วัดได้** — ใช้เป็น "ต้นทุนรวมที่ backtest มองไม่เห็น" ได้ แต่อย่าอ้างว่าเป็น slippage ล้วน
+
 **Self-learning scope:** ตอนนี้ = optimize params ของ strategy ปัจจุบัน (ยังไม่ใช่ RL discover strategy ใหม่)
 
 **Promote (manual approve):** optimizer หา candidate → ดูใน dashboard → กด Apply → executor ใช้ params ใหม่ (ต้อง approve เสมอ ไม่ auto)
@@ -293,7 +318,7 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 
 - **Platform:** Railway (cloud, 24/7)
 - **Region:** Southeast Asia (สำคัญ — ย้ายมาจาก US เพื่อแก้ geo-block ของ Binance/Bybit)
-- **Entry:** `start.py` รัน `trading.live_demo` (thread) + dashboard (main) พร้อมกัน. live_demo = signal + Telegram alert + auto-execute (DRY_RUN guard). *(main.py = legacy signal-only, เก็บไว้)*
+- **Entry:** `start.py` = supervisor รัน 2 process แยกกัน — `trading.live_demo` (thread) + dashboard (main) **ตัวไหนตายก็ปลุกใหม่เอง ไม่ลากอีกตัวลง** (ดู Known Issues "dashboard segfault"). live_demo = signal + Telegram alert + auto-execute (DRY_RUN guard). *(main.py = legacy signal-only, เก็บไว้)*
 - **URL:** https://web-production-e07d8.up.railway.app/
 - **Auto-deploy:** push เข้า branch ที่ผูกไว้ → redeploy อัตโนมัติ (ต้องเปิด Auto Deploy ใน Settings)
 - **GitHub:** pondchalong/something — work branch `something_1`, merge เข้า `main` ผ่าน PR
@@ -335,6 +360,8 @@ py -3.12 -m pip install -r requirements.txt
 # --- Phase 2 ---
 # backtest (active params)
 py -3.12 -m backtest.engine --limit 1500
+py -3.12 -m backtest.engine --limit 5000 --slippage 10     # คิดต้นทุน execution 10 bps/ข้าง
+py -3.12 -m backtest.engine --limit 5000 --sweep           # เทียบหลายค่า → ดูว่า edge ทนได้แค่ไหน
 
 # optimizer (หา strategy ดีสุด — ใช้เวลาหลายนาที)
 py -3.12 -m backtest.optimizer --trials 100 --limit 2000
@@ -383,6 +410,10 @@ py -3.12 test_reconcile.py
   - ตรวจได้ด้วย `py -3.12 -m analysis.trade_stats` (section "ความน่าเชื่อของ exit price") หรือ dashboard → Demo Trades
   - 📌 **ข้อมูลใหม่หลังแก้ต้องเก็บใหม่ทั้งหมด** — อย่าเอาไม้ก่อน 26 ก.ค. มารวมวัดผล
 - **`fetch_my_trades` ของ Binance futures ได้ข้อมูลไม่ครบแบบเงียบๆ (แก้แล้ว 26 ก.ค. 2026):** `/fapi/v1/userTrades` จำกัดช่วง `startTime`→`endTime` **ไม่เกิน 7 วัน** — ส่ง `since` ย้อนหลัง 60 วันไปเฉยๆ จะได้แค่ 7 วันแรก **ไม่ error ไม่เตือน** (ครั้งแรกได้ 14 fill จากของจริง 647). และห้าม dedupe fill ด้วย (orderId, เวลา, ราคา, ขนาด) — order เดียวแตกเป็นหลาย fill ที่ค่าเหล่านี้เท่ากันเป๊ะได้ ต้องใช้ **trade id** ไม่งั้น fill จริงหาย → ไล่ position แล้วไม่กลับเป็น 0 → 647 fill ประกอบได้แค่ 7 ไม้แทนที่จะเป็น 123. ทั้งสองจุดแก้ใน `fetch_fills()` แล้ว (`FETCH_WINDOW_MS` + dedupe ด้วย `trade_id`)
+- ✅ **dashboard segfault ลากบอทตายไปด้วย → เว็บ 502 (แก้แล้ว 27 ก.ค. 2026):** streamlit process ตายด้วย `Fatal Python error: Segmentation fault` ที่ `pandas/core/arrays/string_arrow.py _from_sequence` ตอน `fetch_ohlcv()` สร้าง DataFrame (แค่ชื่อคอลัมน์ก็พอ) — **pandas 3 ใช้ string dtype ที่ backend เป็น pyarrow เป็น default** และ `pyarrow` ไม่ได้ถูก pin (streamlit ลากมาเอง) → build ใหม่ได้เวอร์ชันที่ไม่เข้ากัน. ที่แย่กว่านั้น: `start.py` เดิมพอ dashboard ตาย process แม่จบตาม → **bot หยุดเทรดทั้งที่ถือไม้อยู่** (เกิดจริง 27 ก.ค. ตอนถือ SHORT) แล้ว container วน crash-loop = 502
+  - **ที่แก้ 3 ชั้น:** (1) `config.py` ตั้ง `pd.options.mode.string_storage = "python"` → โค้ดเราไม่แตะ pyarrow อีก · (2) pin `pyarrow==24.0.0` ใน requirements.txt · (3) `start.py` เป็น supervisor: bot กับ dashboard แยก process ใครตายปลุกใหม่เอง (+ `--server.fileWatcherType none` ประหยัดแรม)
+  - **ผลข้างเคียงตอนบอทตายคาไม้:** position โดน SL/TP ปิดไปเองแต่ conditional order อีกข้างค้างบน exchange → พอบอทกลับมา branch `open_trade and not has_pos` จะ `record_closed_trade()` + `cancel_open_orders()` ล้างให้เอง (ต้องมี `open_trade.json` บน volume)
+  - **ถ้ายัง segfault อีก** (streamlit แปลง DataFrame เป็น Arrow เองตอน render — คนละ path กับที่แก้): ไล่ตามลำดับ (1) downgrade `pyarrow` (2) downgrade `pandas` เป็น 2.3.x. ระหว่างนั้น bot ไม่หยุดเทรดแล้วเพราะ supervisor แยก process ให้
 - **Railway auto-deploy:** ถ้า deploy ค้าง commit เก่า → เช็ค Auto Deploy ON + branch ที่ผูก, trigger redeploy manual
 - **ดึง trade_log ออกจาก Railway:** filesystem ของ Railway เข้าจากข้างนอกตรงๆ ไม่ได้ → ใช้ dashboard → Demo Trades → **Export CSV** (หรือ Railway CLI: `railway run cat /data/trade_log.json > demo.json`) แล้ววิเคราะห์ด้วย `py -3.12 -m analysis.trade_stats --file demo.csv`
 - **Claude Code (web) เข้า exchange API / Railway URL ไม่ได้:** environment มี egress proxy ที่บล็อก host นอก allowlist → `curl`/ccxt ได้ **403 CONNECT tunnel failed** (ไม่ใช่ geo-block ของ exchange, และ retry ไม่ช่วย). ผลคือรัน backtest/optimizer ที่ต้อง fetch OHLCV ไม่ได้ใน session นั้น → ใช้ `analysis/trade_stats.py` (offline) วิเคราะห์จากไฟล์แทน, หรือแก้ network policy ของ environment ให้ผ่าน `api.binance.com` ฯลฯ
@@ -397,13 +428,16 @@ py -3.12 test_reconcile.py
 - ✅ Dashboard: Backtest / Optimizer / Demo Trades + วิเคราะห์เชิงลึก
 - ✅ trade_stats (forward validation) + reconcile (เทียบกับ fill จริง)
 - ✅ แก้บั๊ก exit price / phantom close / order ค้าง (26 ก.ค.)
+- ✅ reconcile กับ fill จริง + slippage model ใน backtest (26 ก.ค.) → รู้แล้วว่า backtest เดิมมองโลกสวยเกินจริงเพราะสมมติว่าได้ราคาเป๊ะ
 
 **ทำต่อ — เรียงตามลำดับ ห้ามข้าม:**
 1. ⏳ **merge branch แก้บั๊กเข้า branch ที่ Railway ผูกไว้ → redeploy** — ถ้าไม่ทำ production ยังรันโค้ดที่มีบั๊กอยู่ ข้อมูลใหม่ก็เชื่อไม่ได้เหมือนเดิม
 2. ✅ **reconcile กับ fill จริง (ทำแล้ว 26 ก.ค.)** — ของจริง **-24.27% / 123 ไม้** (แย่กว่า log ที่ -17.85%) ดูตาราง "ผล reconcile รอบแรก" ด้านบน. เหลือส่วนเดียว: export `trade_log.json` จาก Railway มาเทียบ exit price รายไม้ (`--log <path>`)
 3. ⏳ **เก็บข้อมูลใหม่ ≥50 ไม้** ด้วย execution ที่แก้แล้ว — ระหว่างนี้เช็คว่าไม่มี `exit_reason: "other"` โผล่ถี่ๆ, ไม่มี record `exit_unreliable` และ**ไม่มีไม้ที่ปิดภายใน <2 นาที**
 4. ⏳ **re-validate:** `py -3.12 -m analysis.trade_stats` + `reconcile` เทียบกับ backtest → ตัดสินว่า strategy มี edge จริงไหม. **เกณฑ์ที่ต้องผ่าน: gross/ไม้ > +0.08%** (ไม่งั้นค่า fee กินหมด) — ข้อมูลชุดเก่าอยู่ที่ -0.02%
-5. ⏳ **ค่อย optimize params** (`py -3.12 -m backtest.optimizer --trials 100`) — **ห้ามทำก่อนข้อ 3–4**. ทิศทางจาก reconcile: ดัน **fee ต่อ R ให้ต่ำลง** (SL กว้างขึ้น / TF สูงขึ้น / เทรดถี่น้อยลง) และใส่ **slippage** เข้า model ก่อนเชื่อผล
+   - เทียบกับ backtest ต้องใช้ **`--slippage 10`** (ค่าที่ทำให้ backtest ตรงกับผลจริงของช่วง มิ.ย.–ก.ค.) ไม่ใช่ 0
+   - มี trade_log จาก Railway เมื่อไหร่ → เทียบ exit fill กับ SL/TP รายไม้ เพื่อแยกว่า 10 bps มาจากขาออกหรือมาจาก "เทรดถี่กว่า backtest"
+5. ⏳ **ค่อย optimize params** (`py -3.12 -m backtest.optimizer --trials 100 --slippage 10`) — **ห้ามทำก่อนข้อ 3–4** และ**ห้ามใช้ slippage 0** (จะได้ params ที่กำไรเฉพาะในโลกที่ execution สมบูรณ์แบบ). ทิศทาง: ดัน **fee+slippage ต่อ R ให้ต่ำลง** (SL กว้างขึ้น / TF สูงขึ้น / เทรดถี่น้อยลง)
 6. 🔮 อนาคต: walk-forward optimization, slippage model, RL discover strategy ใหม่
 
 **⚠️ งานที่ต้องรันบนเครื่อง local เท่านั้น** (Claude Code บน web ทำไม่ได้ — egress proxy บล็อก host นอก allowlist):

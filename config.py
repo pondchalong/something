@@ -1,7 +1,14 @@
 import os
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# pandas 3 ใช้ string dtype ที่ backend เป็น pyarrow เป็น default → การสร้าง DataFrame
+# ธรรมดา (แม้แค่ชื่อคอลัมน์) วิ่งผ่านโค้ด C++ ของ pyarrow. บน Railway มันทำให้
+# process ตายด้วย Segmentation fault ที่ ArrowStringArray._from_sequence (27 ก.ค. 2026)
+# → บังคับใช้ backend ของ python แทน (ผลลัพธ์เหมือนเดิม แค่ไม่แตะ pyarrow)
+pd.options.mode.string_storage = "python"
 
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
 BYBIT_SECRET_KEY = os.getenv("BYBIT_SECRET_KEY", "")
