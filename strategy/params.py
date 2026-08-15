@@ -17,6 +17,12 @@ class StrategyParams:
     # Risk / exit
     atr_multiplier: float = 1.5      # SL = ATR × นี้
     risk_reward: float = 2.0         # TP = SL × นี้
+    # พื้นระยะ SL ขั้นต่ำ (สัดส่วนของราคา) — กันตลาดนิ่งจน ATR เล็กมาก แล้วเกิด 2 อาการ:
+    # (1) stop ชิด mark price เกินไป → Binance reject -2021 → executor ปิดทิ้ง = เสีย fee ฟรี
+    # (2) size = risk/sl_dist ระเบิด (เคยขึ้นถึง leverage 15x, fee 1.25R)
+    # 0.15% เลือกจากข้อมูลจริง: กระทบแค่ 3/20 ไม้ แต่ปิดเพดาน fee ที่ 0.53R / leverage 6.7x
+    # ตั้ง 0 = พฤติกรรมเดิม (ใช้ตอนอยาก reproduce ผล backtest เก่า)
+    min_sl_pct: float = 0.0015
 
     # Signal filter
     confluence_min: int = 3          # confluence ต่ำกว่านี้ → ไม่ส่งสัญญาณ

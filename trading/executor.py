@@ -13,7 +13,7 @@ from datetime import datetime
 
 import ccxt
 
-from config import SYMBOL, RISK_PER_TRADE, DRY_RUN, DATA_DIR
+from config import SYMBOL, RISK_PER_TRADE, DRY_RUN, DATA_DIR, MAX_NOTIONAL_MULT
 from data.fetcher import get_testnet_exchange
 from utils.logger import logger
 
@@ -155,6 +155,13 @@ def execute_signal(signal: dict, symbol=SYMBOL) -> dict:
     if sl_distance <= 0:
         return {"status": "skipped", "reason": "invalid_sl"}
     raw_size = (balance * RISK_PER_TRADE) / sl_distance
+    # เพดานที่สอง (นอกจากพื้น SL ใน signals.sl_tp_distances) — กันเคสสุดโต่งที่ sl_distance
+    # เล็กผิดปกติแล้ว size ระเบิด. ของจริง 1 ส.ค. 2026 เคยขึ้นถึง leverage 15.3x
+    cap_size = (balance * MAX_NOTIONAL_MULT) / signal["price"]
+    if raw_size > cap_size:
+        logger.warning(f"size เกินเพดาน {MAX_NOTIONAL_MULT}x ของ balance "
+                       f"({raw_size:.4f} → {cap_size:.4f}) — SL แคบผิดปกติ {sl_distance:.2f}")
+        raw_size = cap_size
     size = float(ex.amount_to_precision(symbol, raw_size))
     if size <= 0:
         return {"status": "skipped", "reason": "size_too_small"}

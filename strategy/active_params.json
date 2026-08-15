@@ -1,6 +1,7 @@
 {
   "atr_multiplier": 1.5,
   "risk_reward": 2.0,
+  "min_sl_pct": 0.0015,
   "confluence_min": 3,
   "htf_filter": false,
   "skip_high_vol": true,
