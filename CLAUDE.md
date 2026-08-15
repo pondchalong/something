@@ -69,6 +69,7 @@ something/
 ├── test_executor_exit.py    # unit test trade lifecycle (exchange ปลอม, offline)
 ├── test_live_demo_loop.py   # test state machine ของ live_demo (offline)
 ├── test_backtest_slippage.py # unit test slippage model ของ backtest engine (offline)
+├── test_sl_floor.py         # unit test พื้น SL ขั้นต่ำ + เพดาน notional (offline)
 ├── test_reconcile.py        # unit test reconcile + การดึง fill (offline)
 ├── requirements.txt         # pinned deps
 ├── runtime.txt / Procfile   # Railway config
@@ -162,7 +163,7 @@ EMA20/50, RSI(14), MACD(12,26,9), Bollinger Bands(20,2), ATR(14)
   - ⚠️ **ระวัง overfit:** filter หาจาก historical period เดียว — skip_high_vol ดูดีช่วงสั้นแต่หายช่วงยาว. macd_only น่าเชื่อกว่าเพราะมีเหตุผล แต่ sample เล็ก — **forward validate ด้วย demo จริงเสมอ**
   - 📌 **demo CSV (7–29 มิ.ย.) ที่ขาดทุนเป็นของผสม:** skip_high_vol เพิ่งเปิด 11 มิ.ย., macd_only เพิ่งเปิด 16 มิ.ย. → ไม้ช่วงต้นรัน params เก่า (ไม่มี filter). ไม่ใช่หลักฐานว่า strategy ปัจจุบันแย่
 - **Output:** signal (LONG/SHORT), entry, SL, TP, R:R, winrate (40–85% จาก score), risk (จาก volatility cluster + RSI)
-- **SL/TP:** SL = ATR × `params.atr_multiplier`, TP = SL × `params.risk_reward`
+- **SL/TP:** SL = ATR × `params.atr_multiplier` **แต่ไม่แคบกว่า `params.min_sl_pct` ของราคา** (default 0.15% — ดู Known Issues "sizing ไม่มีเพดาน"), TP = SL × `params.risk_reward`. คำนวณที่ `signals.sl_tp_distances()` ที่เดียว → backtest/live ตรงกันเสมอ
 - **Parameterized (Phase 2):** `generate_signal(df, params)` + `add_indicators(df, df_htf, params)` รับ `StrategyParams` (default = ค่าเดิม → Phase 1 ทำงานเหมือนเดิม). optimizer ปรับ params ได้
 
 ---
@@ -308,6 +309,15 @@ Streamlit web app — **Sidebar page navigation:** Live Signal / Backtest / Opti
 - 📏 **แต่ entry slippage ที่วัดได้จริง ≈ 0** (เทียบ fill กับ close ของแท่ง 15m: median -0.06 bps, ก.ค. -1.4 bps, ดีเลย์ median 38s) → **ต้นทุน 10 bps ไม่ได้อยู่ที่ขาเข้า** เหลือ 2 คำอธิบาย: (ก) ขาออก — SL/TP เป็น stop-market ที่ trigger ตอนราคาวิ่งแรง จึง fill แย่กว่าระดับที่ตั้ง (backtest เดิมสมมติได้เป๊ะ) (ข) ของจริงเทรดถี่กว่า backtest 20% (108 vs 89 ไม้) = เข้าไม้ที่ backtest ไม่นับ. **ยังพิสูจน์ไม่ได้ว่าเป็นข้อไหน** — ต้องมี SL/TP รายไม้จาก `trade_log.json` (Railway) มาเทียบกับ exit fill ถึงจะแยกได้
 - ⚠️ **10 bps คือค่าที่ fit ให้ตรงผลรวม ไม่ใช่ค่าที่วัดได้** — ใช้เป็น "ต้นทุนรวมที่ backtest มองไม่เห็น" ได้ แต่อย่าอ้างว่าเป็น slippage ล้วน
 
+**📊 ชุดข้อมูลใหม่หลังแก้บั๊ก (28 ก.ค. 04:30 – 15 ส.ค. 2026, 26 ไม้, ตรวจ 16 ส.ค.):**
+- net **-427.70 USDT** · winrate 23% · **gross/ไม้ -0.035%** (เกณฑ์ต้อง > +0.08% → ไม่ผ่าน) · fee 298.73 = 70% ของที่ขาดทุน
+- **execution สะอาดแล้ว** (ยืนยันจาก order history ของ exchange ซึ่งมี trigger price ของ SL/TP ทุกไม้ — **ไม่ต้องใช้ trade_log จาก Railway**): SL ทำงานเป๊ะ 14 ไม้ เฉลี่ย **-1.04R** · R:R ที่ตั้งจริง median 2.00 · exit slippage median **+0.28 bps**
+- ❗ **7/26 ไม้ไม่มี SL/TP ตั้งไว้เลย** (ยืนยัน: ไม่มี conditional order ในช่วง ±15 นาที) = path `-2021 → close_position` ทำงาน. เกิดตอน **ATR ต่ำมาก** → SL แคบ → stop ชิด mark price เกินไป. ไม้พวกนี้ gross ≈ 0 แต่**เสีย fee ฟรี 102.71 USDT** (24% ของที่ขาดทุน) เพราะ size ระเบิด (ดู Known Issues "sizing ไม่มีเพดาน")
+- ⚠️ **TP fill ได้แย่กว่า trigger มาก:** ไม้ TP เฉลี่ยได้จริง **+1.63R ไม่ใช่ +2R** — slippage ขาออกของ TP เฉลี่ย ~13 bps (SL แค่ ~1 bps) เพราะ conditional order trigger ด้วย **mark price** แต่ fill ที่ราคาตลาดจริง (ราคาแตะ TP แว้บเดียวแล้วเด้งกลับ)
+- 🎯 **winrate ต่ำไม่ใช่ปัญหา execution — เป็นสภาพตลาด:** backtest บนแท่งเดียวกัน (28 ก.ค.–15 ส.ค.) ได้ **winrate 20.7% return -4.77%** ที่ slippage 0 = **แย่กว่าของจริง** (26%). ช่วงนี้ตลาดนิ่ง/แกว่ง (ATR ลงไปถึง 4-5 bps) ซึ่งเป็นสภาพที่ strategy แนว MACD cross ตายพอดี
+- 🧮 **winrate ที่ต้องได้ถึงจะคุ้ม** = `w×1.63 − (1−w)×1.04 − 0.33 = 0` → **51%** (fee 0.33R + TP ที่ได้ไม่เต็ม ดันเกณฑ์ขึ้นจาก ~38%)
+- 📌 **แก้ความเข้าใจเรื่อง "10 bps":** ค่านั้น fit จากข้อมูล มิ.ย.–ก.ค. ที่ยังมีบั๊กปน — พอวัดบนข้อมูลสะอาด **ไม่พบต้นทุนซ่อน 10 bps** (entry ~0, exit median 0.28 bps) และช่วง ส.ค. ของจริง (gross/ไม้ -0.035%) **ดีกว่า** backtest ที่ 0 bps (-0.088%) ด้วยซ้ำ → ใช้ `--slippage 2-5` เป็น sanity check ก็พอ อย่ายึด 10
+
 **Self-learning scope:** ตอนนี้ = optimize params ของ strategy ปัจจุบัน (ยังไม่ใช่ RL discover strategy ใหม่)
 
 **Promote (manual approve):** optimizer หา candidate → ดูใน dashboard → กด Apply → executor ใช้ params ใหม่ (ต้อง approve เสมอ ไม่ auto)
@@ -333,6 +343,7 @@ TIMEFRAME                 = 15m
 BINANCE_TESTNET_API_KEY   = (จาก testnet.binancefuture.com)
 BINANCE_TESTNET_SECRET    = (จาก testnet.binancefuture.com)
 RISK_PER_TRADE            = 0.01   # 1% ต่อไม้
+MAX_NOTIONAL_MULT         = 8      # เพดาน notional ต่อไม้ = กี่เท่าของ balance (default 8)
 DRY_RUN                   = true   # true = ไม่ยิง order จริง (ตั้ง false เมื่อพร้อม)
 DATA_DIR                  = /data  # Railway Volume mount → trade_log ถาวร (ไม่ตั้ง = ephemeral)
 ```
@@ -377,6 +388,7 @@ py -3.12 test_trade_stats.py                          # unit test
 # test lifecycle ของไม้ + state machine (offline ทั้งคู่ ไม่ต้องต่อ testnet)
 py -3.12 test_executor_exit.py
 py -3.12 test_live_demo_loop.py
+py -3.12 test_sl_floor.py
 
 # กระทบยอด log ที่ bot บันทึก กับ fill จริงจาก Binance (ต้องมี testnet API key)
 py -3.12 -m analysis.reconcile --days 60
@@ -414,6 +426,13 @@ py -3.12 test_reconcile.py
   - **ที่แก้ 3 ชั้น:** (1) `config.py` ตั้ง `pd.options.mode.string_storage = "python"` → โค้ดเราไม่แตะ pyarrow อีก · (2) pin `pyarrow==24.0.0` ใน requirements.txt · (3) `start.py` เป็น supervisor: bot กับ dashboard แยก process ใครตายปลุกใหม่เอง (+ `--server.fileWatcherType none` ประหยัดแรม)
   - **ผลข้างเคียงตอนบอทตายคาไม้:** position โดน SL/TP ปิดไปเองแต่ conditional order อีกข้างค้างบน exchange → พอบอทกลับมา branch `open_trade and not has_pos` จะ `record_closed_trade()` + `cancel_open_orders()` ล้างให้เอง (ต้องมี `open_trade.json` บน volume)
   - **ถ้ายัง segfault อีก** (streamlit แปลง DataFrame เป็น Arrow เองตอน render — คนละ path กับที่แก้): ไล่ตามลำดับ (1) downgrade `pyarrow` (2) downgrade `pandas` เป็น 2.3.x. ระหว่างนั้น bot ไม่หยุดเทรดแล้วเพราะ supervisor แยก process ให้
+- ✅ **sizing ไม่มีเพดาน → ตลาดนิ่งเมื่อไหร่ จ่าย fee ฟรี (แก้แล้ว 16 ส.ค. 2026):** `size = risk / sl_dist` พอ `sl_dist` เข้าใกล้ 0 (ATR ต่ำ) size โตไม่จำกัด. ของจริง 1 ส.ค.: ATR **5.3 bps** → SL 7.9 bps → size 0.48 BTC = **leverage 12.6x** → **fee = 1.01R** (ค่าธรรมเนียมกินงบความเสี่ยงทั้งก้อน). และ stop ที่ห่างแค่ 6-8 bps อยู่ในระยะ noise ของ mark price → Binance reject **-2021** → executor ปิด position ทิ้ง = ไม้ขยะ (7/26 ไม้ในชุดใหม่, เสีย fee ฟรี 102.71 USDT)
+  - สถิติชุดใหม่: fee/R median **0.33R** (6 ไม้ > 0.5R, 2 ไม้ > 1R) · leverage median 4.7x **max 15.3x**
+  - **ที่แก้ (16 ส.ค.):** (1) `params.min_sl_pct` (default **0.0015 = 0.15%**) → `signals.sl_tp_distances()` ดัน SL ให้กว้างอย่างน้อยเท่านี้ **R:R คงเดิม** — อยู่ในชั้น signal เลย **backtest กับ live เห็นเหมือนกัน** (ตั้ง 0 = พฤติกรรมเดิม ไว้ reproduce ผลเก่า) · (2) `config.MAX_NOTIONAL_MULT` (default **8x**) เพดานที่สองใน executor เผื่อเคสสุดโต่ง · test: `py -3.12 test_sl_floor.py` (9 เคส)
+  - **เลือก 0.15% จากข้อมูลจริง** (SL ที่ตั้งสำเร็จ 20 ไม้): กระทบแค่ 3/20 ไม้ แต่ปิดเพดาน fee ที่ 0.53R / leverage 6.7x. backtest 5000 แท่ง (24 มิ.ย.–15 ส.ค., slippage 2 bps) ยืนยันไม่เสียหาย: return -7.24% → **-6.15%**, winrate 33.7% → 36.6%, MaxDD 7.6% → 6.5%
+  - ⚠️ **ไม่ได้ทำให้กำไร** — แค่หยุดรั่ว. ค่าที่กว้างกว่านี้ (0.20-0.30%) ดูดีกว่าใน backtest แต่นั่นคือ "ขยาย SL" = เปลี่ยน strategy → เป็นงานของ optimizer ไม่ใช่ safety fix
+  - ยังไม่ทำ: ข้ามไม้ที่ fee/R > 0.3 · เปลี่ยน TP เป็น limit order (ดูข้อถัดไป)
+- **conditional order ของ Binance trigger ด้วย mark price ไม่ใช่ราคาตลาด:** TP/SL trigger เมื่อ **mark** แตะระดับ แต่ fill ที่ราคาตลาดจริง → ราคาที่ได้ต่างจาก trigger ได้เยอะ. วัดจริง: SL ต่างเฉลี่ย ~1 bps แต่ **TP ต่างเฉลี่ย ~13 bps** (สูงสุด 55 bps) → ไม้ชนะได้จริงแค่ ~1.63R จาก 2R ที่ตั้งไว้. backtest ที่สมมติ fill เป๊ะที่ TP จึงมองโลกสวยเกินจริงเฉพาะฝั่งไม้ชนะ
 - **Railway auto-deploy:** ถ้า deploy ค้าง commit เก่า → เช็ค Auto Deploy ON + branch ที่ผูก, trigger redeploy manual
 - **ดึง trade_log ออกจาก Railway:** filesystem ของ Railway เข้าจากข้างนอกตรงๆ ไม่ได้ → ใช้ dashboard → Demo Trades → **Export CSV** (หรือ Railway CLI: `railway run cat /data/trade_log.json > demo.json`) แล้ววิเคราะห์ด้วย `py -3.12 -m analysis.trade_stats --file demo.csv`
 - **Claude Code (web) เข้า exchange API / Railway URL ไม่ได้:** environment มี egress proxy ที่บล็อก host นอก allowlist → `curl`/ccxt ได้ **403 CONNECT tunnel failed** (ไม่ใช่ geo-block ของ exchange, และ retry ไม่ช่วย). ผลคือรัน backtest/optimizer ที่ต้อง fetch OHLCV ไม่ได้ใน session นั้น → ใช้ `analysis/trade_stats.py` (offline) วิเคราะห์จากไฟล์แทน, หรือแก้ network policy ของ environment ให้ผ่าน `api.binance.com` ฯลฯ
@@ -462,6 +481,7 @@ copy .env.example .env        # แล้วใส่ TELEGRAM_* + BINANCE_TESTN
 py -3.12 test_trade_stats.py
 py -3.12 test_executor_exit.py
 py -3.12 test_live_demo_loop.py
+py -3.12 test_sl_floor.py
 py -3.12 test_reconcile.py
 
 # 4. งานแรกที่ควรทำ (ดู Roadmap ข้อ 2)

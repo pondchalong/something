@@ -80,6 +80,19 @@ def _risk_level(row: pd.Series) -> str:
     return "MEDIUM"
 
 
+def sl_tp_distances(close: float, atr: float, params=DEFAULT_PARAMS) -> tuple:
+    """
+    ระยะ SL/TP จาก ATR + พื้นขั้นต่ำ (params.min_sl_pct)
+
+    ทำไมต้องมีพื้น: ตลาดนิ่ง → ATR เล็ก → SL แคบมาก → (1) stop ชิด mark price
+    จน Binance reject -2021 แล้ว executor ปิด position ทิ้ง = เสีย fee ฟรี
+    (2) size = risk/sl_dist ระเบิด (ของจริง 1 ส.ค.: ATR 5.3 bps → leverage 12.6x, fee 1.01R)
+    R:R คงเดิมเสมอ — พื้นดัน SL ออก TP ก็ขยับตามสัดส่วน
+    """
+    sl_distance = max(atr * params.atr_multiplier, close * params.min_sl_pct)
+    return sl_distance, sl_distance * params.risk_reward
+
+
 def generate_signal(df: pd.DataFrame, params=DEFAULT_PARAMS) -> dict | None:
     latest = df.iloc[-1]
     prev = df.iloc[-2]
@@ -135,8 +148,7 @@ def generate_signal(df: pd.DataFrame, params=DEFAULT_PARAMS) -> dict | None:
     if score < params.confluence_min:
         return None
 
-    sl_distance = atr * params.atr_multiplier
-    tp_distance = sl_distance * params.risk_reward
+    sl_distance, tp_distance = sl_tp_distances(close, atr, params)
 
     if signal_type == "LONG":
         sl = round(close - sl_distance, 2)

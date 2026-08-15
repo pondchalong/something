@@ -30,6 +30,9 @@ BINANCE_TESTNET_API_KEY = os.getenv("BINANCE_TESTNET_API_KEY", "").strip()
 BINANCE_TESTNET_SECRET = os.getenv("BINANCE_TESTNET_SECRET", "").strip()
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))   # 1% ของ balance ต่อไม้
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"      # true = log อย่างเดียว ไม่ยิง order จริง
+# เพดาน notional ต่อไม้ = กี่เท่าของ balance — กัน size ระเบิดตอน SL แคบผิดปกติ
+# (ของจริง 1 ส.ค. 2026 เคยขึ้นถึง 15.3x เพราะ ATR ต่ำ 5 bps) ดู strategy.params.min_sl_pct
+MAX_NOTIONAL_MULT = float(os.getenv("MAX_NOTIONAL_MULT", "8"))
 
 # Railway Volume (persistent disk) สำหรับ runtime data ที่ต้องเก็บถาวร เช่น trade_log
 # ตั้ง DATA_DIR = mount path ของ volume (เช่น /data) → log ไม่หายเมื่อ redeploy
