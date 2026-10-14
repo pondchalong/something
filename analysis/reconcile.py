@@ -106,7 +106,9 @@ def group_into_trades(fills: list) -> list:
                    "open_qty": 0.0, "open_notional": 0.0,
                    "close_qty": 0.0, "close_notional": 0.0,
                    "realized_pnl": 0.0, "commission": 0.0,
-                   "entry_ts": f["ts"], "exit_ts": f["ts"], "n_fills": 0}
+                   "entry_ts": f["ts"], "exit_ts": f["ts"], "n_fills": 0,
+                   # order id ของขาปิด — เอาไปจับคู่กับ SL/TP ว่าไม้จบด้วยอะไร
+                   "close_order_ids": []}
         cur["n_fills"] += 1
         cur["commission"] += f["commission"]
         cur["realized_pnl"] += f["realized_pnl"]
@@ -119,6 +121,8 @@ def group_into_trades(fills: list) -> list:
         else:
             cur["close_qty"] += abs(signed)
             cur["close_notional"] += abs(signed) * f["price"]
+            if f.get("order_id") and f["order_id"] not in cur["close_order_ids"]:
+                cur["close_order_ids"].append(f["order_id"])
 
         pos = round(pos + signed, 10)
         if pos == 0:
