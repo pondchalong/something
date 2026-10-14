@@ -1,0 +1,118 @@
+{
+ "balance_usdt_at_export": 1805.7,
+ "exported_at": "2026-10-15T02:52:51",
+ "symbol": "BTC/USDT",
+ "source": "Binance USD-M futures testnet",
+ "fills": 1123,
+ "algo_orders": 364,
+ "orders": 256,
+ "trades": 237,
+ "first_fill": "2026-06-01T07:08:48",
+ "last_fill": "2026-10-14T16:27:55",
+ "eras": [
+  {
+   "start": "2026-06-01 00:00",
+   "name": "E0_buggy",
+   "note": "execution มีบั๊ก exit price / phantom close / SL-TP ค้าง — ห้ามใช้วัด strategy"
+  },
+  {
+   "start": "2026-07-28 04:30",
+   "name": "E1_exit_fixed",
+   "note": "แก้บั๊ก exit + supervisor แล้ว ยังไม่มีพื้น SL (ตลาดนิ่ง = ไม้ขยะ)"
+  },
+  {
+   "start": "2026-08-16 04:31",
+   "name": "E2_sl_floor",
+   "note": "พื้น SL 0.15% + เพดาน notional 8x"
+  }
+ ],
+ "summary_by_era": {
+  "E0_buggy": {
+   "n": 126,
+   "days": 56.5,
+   "per_day": 2.23,
+   "net_usdt": -2155.95,
+   "gross_usdt": -1014.39,
+   "fee_usdt": 1141.56,
+   "winrate": 34.9,
+   "pf": 0.41,
+   "gross_per_trade_pct": -0.0711,
+   "net_per_trade_pct": -0.1511,
+   "exit_via": {
+    "no_history": 38,
+    "bot_market": 11,
+    "SL": 45,
+    "TP": 25,
+    "stale_order": 3,
+    "no_stops": 4
+   },
+   "junk_under_2min": 15,
+   "fee_r_median": 0.241,
+   "SL_r_mean": -1.006,
+   "SL_r_median": -1.013,
+   "SL_slip_bps_median": 0.45,
+   "SL_slip_bps_mean": 0.22,
+   "TP_r_mean": 1.314,
+   "TP_r_median": 1.427,
+   "TP_slip_bps_median": 12.73,
+   "TP_slip_bps_mean": 21.54,
+   "breakeven_winrate": 53.7
+  },
+  "E1_exit_fixed": {
+   "n": 27,
+   "days": 19.1,
+   "per_day": 1.41,
+   "net_usdt": -484.17,
+   "gross_usdt": -155.18,
+   "fee_usdt": 328.99,
+   "winrate": 22.2,
+   "pf": 0.31,
+   "gross_per_trade_pct": -0.0377,
+   "net_per_trade_pct": -0.1177,
+   "exit_via": {
+    "TP": 6,
+    "SL": 15,
+    "no_stops": 6
+   },
+   "junk_under_2min": 6,
+   "fee_r_median": 0.341,
+   "SL_r_mean": -1.04,
+   "SL_r_median": -1.009,
+   "SL_slip_bps_median": 0.2,
+   "SL_slip_bps_mean": 0.88,
+   "TP_r_mean": 1.604,
+   "TP_r_median": 1.767,
+   "TP_slip_bps_median": 6.04,
+   "TP_slip_bps_mean": 13.24,
+   "breakeven_winrate": 52.2
+  },
+  "E2_sl_floor": {
+   "n": 84,
+   "days": 59.3,
+   "per_day": 1.42,
+   "net_usdt": -533.42,
+   "gross_usdt": -31.17,
+   "fee_usdt": 502.24,
+   "winrate": 38.1,
+   "pf": 0.63,
+   "gross_per_trade_pct": -0.005,
+   "net_per_trade_pct": -0.085,
+   "exit_via": {
+    "SL": 49,
+    "TP": 33,
+    "no_stops": 2
+   },
+   "junk_under_2min": 0,
+   "fee_r_median": 0.26,
+   "SL_r_mean": -1.056,
+   "SL_r_median": -1.017,
+   "SL_slip_bps_median": 0.42,
+   "SL_slip_bps_mean": 1.87,
+   "TP_r_mean": 1.592,
+   "TP_r_median": 1.676,
+   "TP_slip_bps_median": 9.95,
+   "TP_slip_bps_mean": 13.43,
+   "breakeven_winrate": 49.7
+  }
+ }
+}

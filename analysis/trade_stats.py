@@ -122,7 +122,10 @@ def param_eras(repo_dir: str = None) -> list:
     try:
         log = subprocess.run(
             ["git", "log", "--reverse", "--format=%H|%cI|%s", "--", rel],
-            cwd=repo_dir, capture_output=True, text=True, timeout=30, check=True,
+            cwd=repo_dir, capture_output=True, timeout=30, check=True,
+            # git ส่ง UTF-8 เสมอ — text=True เฉยๆ บน Windows จะถอดด้วย cp874 แล้วพัง
+            # (stdout กลายเป็น None) เมื่อ commit message มีอักษรอย่าง — หรือ →
+            encoding="utf-8", errors="replace",
         ).stdout.strip()
     except (subprocess.SubprocessError, OSError, FileNotFoundError):
         return []
@@ -135,7 +138,10 @@ def param_eras(repo_dir: str = None) -> list:
         try:
             blob = subprocess.run(
                 ["git", "show", f"{sha}:{rel}"],
-                cwd=repo_dir, capture_output=True, text=True, timeout=30, check=True,
+                cwd=repo_dir, capture_output=True, timeout=30, check=True,
+                # git ส่ง UTF-8 เสมอ — text=True เฉยๆ บน Windows จะถอดด้วย cp874 แล้วพัง
+                # (stdout กลายเป็น None) เมื่อ commit message มีอักษรอย่าง — หรือ →
+                encoding="utf-8", errors="replace",
             ).stdout
             params = json.loads(blob)
         except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
